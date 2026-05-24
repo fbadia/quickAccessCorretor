@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { getDriveClient, listPdfFiles, downloadFile } from "./driveService.js";
 import { extractPolicyData } from "./geminiService.js";
-import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers } from "./dbService.js";
+import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedAdminUser } from "./dbService.js";
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -42,6 +42,9 @@ try {
 
   // Executar seed das seguradoras
   seedInsurers(supabase);
+
+  // Executar seed do usuário administrador padrão
+  seedAdminUser(supabase);
 } catch (error) {
   console.error("Erro na inicialização dos clientes de serviços:", error.message);
 }
@@ -138,6 +141,69 @@ app.get("/health", (req, res) => {
     message: "Servidor QuickAccessCorretor está ativo e operando.",
     timestamp: new Date().toISOString()
   });
+});
+
+// Rota para o Admin criar um novo usuário (sem e-mail de confirmação e definindo senha)
+app.post("/admin/users", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Cabeçalho de autorização ausente." });
+  }
+
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ error: "Token de autenticação ausente." });
+  }
+
+  try {
+    // 1. Verificar o token do usuário usando o cliente Supabase
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Sessão inválida ou expirada." });
+    }
+
+    // 2. Verificar se o usuário autenticado é um administrador
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (profileError || !profile || profile.role !== "admin") {
+      return res.status(403).json({ error: "Acesso negado. Apenas administradores podem criar usuários." });
+    }
+
+    // 3. Obter os dados para criar o novo usuário
+    const { email, password, name, role } = req.body;
+    if (!email || !password || !name || !role) {
+      return res.status(400).json({ error: "Campos obrigatórios ausentes: email, password, name, role." });
+    }
+
+    // 4. Criar o usuário no Supabase Auth usando a API admin (bypass de e-mail de confirmação)
+    const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name, role }
+    });
+
+    if (createError) {
+      return res.status(400).json({ error: createError.message });
+    }
+
+    res.status(201).json({
+      message: "Usuário criado com sucesso!",
+      user: {
+        id: newUser.user.id,
+        email: newUser.user.email,
+        name,
+        role
+      }
+    });
+  } catch (err) {
+    console.error("Erro ao criar usuário pelo admin:", err);
+    res.status(500).json({ error: "Erro interno no servidor." });
+  }
 });
 
 // Retorna o status da sincronização

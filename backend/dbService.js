@@ -214,3 +214,49 @@ export async function seedInsurers(supabase) {
   }
   console.log("Seed de seguradoras concluído.");
 }
+
+/**
+ * Realiza o seed do usuário administrador padrão caso ele não exista.
+ * @param {Object} supabase Cliente do Supabase com Service Role.
+ */
+export async function seedAdminUser(supabase) {
+  const adminEmail = "fbadia@gmail.com";
+  try {
+    // 1. Verificar se o profile do administrador já existe no banco
+    const { data: existingProfile, error: checkError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", adminEmail)
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("Erro ao verificar admin existente:", checkError);
+      return;
+    }
+
+    if (!existingProfile) {
+      console.log(`Usuário admin ${adminEmail} não encontrado no profiles. Criando no Auth...`);
+      
+      const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+        email: adminEmail,
+        password: "Badia@123",
+        email_confirm: true,
+        user_metadata: {
+          name: "Flávio",
+          role: "admin"
+        }
+      });
+
+      if (createError) {
+        console.error("Erro ao criar usuário admin no Supabase Auth:", createError.message);
+      } else {
+        console.log(`Usuário admin ${adminEmail} criado com sucesso via seed!`);
+      }
+    } else {
+      console.log(`Usuário admin ${adminEmail} já existe no sistema.`);
+    }
+  } catch (err) {
+    console.error("Erro inesperado no seed do admin:", err.message);
+  }
+}
+

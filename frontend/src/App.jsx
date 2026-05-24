@@ -47,6 +47,7 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState("sync");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
   const [inviteRole, setInviteRole] = useState("broker");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [usersList, setUsersList] = useState([]);
@@ -326,57 +327,41 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
   };
 
-  // Convidar novo Corretor (Admin cria registro de usuário no Auth do Supabase)
-  // Nota: Para MVP, como estamos usando email passwordless, cadastrar o usuário no banco
-  // e permitir login é feito gerando o convite do Supabase. O admin envia um convite.
+  // Cadastrar novo Corretor (Admin cria registro de usuário no backend)
   const handleInviteUser = async (e) => {
     e.preventDefault();
-    if (!inviteEmail || !inviteName) return;
+    if (!inviteEmail || !inviteName || !invitePassword || !inviteRole) return;
 
     setInviteLoading(true);
     try {
-      // Como o Supabase Admin API exige privilégios de service role para convites diretos sem confirmação,
-      // a forma mais limpa para o MVP é o admin registrar as credenciais prévias do corretor em uma tabela de convites
-      // ou utilizar a própria tabela profiles. No entanto, para o login funcionar, o e-mail precisa estar cadastrado.
-      // O Supabase permite enviar um convite oficial por e-mail pelo cliente SDK se a funcionalidade estiver ativada,
-      // mas a melhor prática é chamar uma função RPC ou deixar o Supabase cuidar do convite.
-      // Vamos simular a criação inserindo os metadados do profile no banco primeiro para liberar o acesso:
-      
-      const { data, error } = await supabase.auth.admin.inviteUserByEmail(inviteEmail, {
-        data: { name: inviteName, role: inviteRole }
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const response = await fetch(`${backendUrl}/admin/users`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          email: inviteEmail,
+          password: invitePassword,
+          name: inviteName,
+          role: inviteRole
+        })
       });
-      
-      if (error) {
-        // Se der erro por falta de permissão do service role (comum no client SDK),
-        // explicamos ao usuário admin que ele pode cadastrar o perfil e convidar pelo console do Supabase
-        console.error(error);
-        throw new Error("A API pública do Supabase requer chave Service Role para convites diretos. Por favor, convide o corretor no Painel do Supabase Auth e insira seu perfil aqui.");
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Erro ao cadastrar corretor.");
       }
 
-      showToast(`Convite enviado para ${inviteEmail}!`);
+      showToast(`Corretor ${inviteName} cadastrado com sucesso!`);
       setInviteEmail("");
       setInviteName("");
+      setInvitePassword("");
       fetchAdminData();
     } catch (err) {
-      // Fallback amigável do MVP: O admin insere diretamente na tabela profiles.
-      // Ao tentar logar via Magic Link, o Supabase criará a conta no Auth e o trigger de banco criará o perfil.
-      // Então, se criarmos o perfil antes, garantimos que o corretor tenha o perfil correto cadastrado!
-      try {
-        // Para simular o convite sem a chave admin no cliente (bypassando restrições de RLS se admin):
-        const { error: insertErr } = await supabase
-          .from("profiles")
-          .insert({
-            id: "00000000-0000-0000-0000-000000000000", // id temporário ou omitido se gerido pelo trigger
-            name: inviteName,
-            role: inviteRole,
-            email: inviteEmail
-          });
-        
-        // Se falhar porque não temos o ID do Auth.users (foreign key), o correto é instruir:
-        showToast("Cadastre o e-mail no Supabase Auth e o perfil será gerado.", "warning");
-      } catch (dbErr) {
-        showToast(err.message, "error");
-      }
+      showToast(err.message, "error");
     } finally {
       setInviteLoading(false);
     }
@@ -417,32 +402,11 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         <div className="auth-page">
           <div className="auth-card">
             <div className="auth-header">
-              <h1 className="auth-title">
-                {authMode === "login" ? "Acesso Corretor" : "Criar Conta"}
-              </h1>
-              <p className="auth-subtitle">
-                {authMode === "login" 
-                  ? "Digite seu e-mail e senha para entrar no sistema." 
-                  : "Preencha os dados abaixo para cadastrar-se como corretor."}
-              </p>
+              <h1 className="auth-title">Acesso Corretor</h1>
+              <p className="auth-subtitle">Digite seu e-mail e senha para entrar no sistema.</p>
             </div>
             
             <form onSubmit={handleAuth}>
-              {authMode === "signup" && (
-                <div className="form-group">
-                  <label className="form-label" htmlFor="name">Nome Completo</label>
-                  <input 
-                    id="name"
-                    type="text"
-                    placeholder="ex: Lucas Martins"
-                    className="form-input"
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
-                    required
-                  />
-                </div>
-              )}
-
               <div className="form-group">
                 <label className="form-label" htmlFor="email">E-mail Corporativo</label>
                 <input 
@@ -473,70 +437,12 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
               <button type="submit" className="primary-btn" disabled={authLoading}>
                 {authLoading ? (
                   <RefreshCw className="animate-spin" size={20} />
-                ) : authMode === "login" ? (
-                  <LogIn size={20} />
                 ) : (
-                  <UserPlus size={20} />
+                  <LogIn size={20} />
                 )}
-                {authLoading 
-                  ? "Processando..." 
-                  : authMode === "login" 
-                    ? "Entrar" 
-                    : "Cadastrar-se"}
+                {authLoading ? "Processando..." : "Entrar"}
               </button>
             </form>
-
-            <div style={{ marginTop: "20px", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-              {authMode === "login" ? (
-                <span>
-                  Não tem uma conta?{" "}
-                  <button 
-                    type="button" 
-                    onClick={() => { 
-                      setAuthMode("signup"); 
-                      setAuthMessage(null); 
-                      setAuthPassword("");
-                    }}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "var(--accent-color)",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                      padding: 0,
-                      textDecoration: "underline",
-                      fontFamily: "var(--font-family)"
-                    }}
-                  >
-                    Cadastre-se
-                  </button>
-                </span>
-              ) : (
-                <span>
-                  Já tem uma conta?{" "}
-                  <button 
-                    type="button" 
-                    onClick={() => { 
-                      setAuthMode("login"); 
-                      setAuthMessage(null); 
-                      setAuthPassword("");
-                    }}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "var(--accent-color)",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                      padding: 0,
-                      textDecoration: "underline",
-                      fontFamily: "var(--font-family)"
-                    }}
-                  >
-                    Entrar
-                  </button>
-                </span>
-              )}
-            </div>
 
             {authMessage && (
               <div style={{
@@ -702,6 +608,18 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                       onChange={(e) => setInviteEmail(e.target.value)}
                       required 
                       placeholder="ex: lucas@corretora.com.br"
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Senha</label>
+                    <input 
+                      type="password" 
+                      className="form-input" 
+                      value={invitePassword}
+                      onChange={(e) => setInvitePassword(e.target.value)}
+                      required 
+                      minLength={6}
+                      placeholder="••••••••"
                     />
                   </div>
                   <div className="form-group" style={{ margin: 0 }}>
