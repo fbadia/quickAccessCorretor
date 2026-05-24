@@ -253,7 +253,19 @@ export async function seedAdminUser(supabase) {
         console.log(`Usuário admin ${adminEmail} criado com sucesso via seed!`);
       }
     } else {
-      console.log(`Usuário admin ${adminEmail} já existe no sistema.`);
+      console.log(`Usuário admin ${adminEmail} já existe no sistema. Atualizando senha para garantir acesso...`);
+      
+      // Forçar atualização da senha do admin existente
+      const { data: updatedUser, error: updateError } = await supabase.auth.admin.updateUserById(
+        existingProfile.id,
+        { password: "Badia@123" }
+      );
+
+      if (updateError) {
+        console.error("Erro ao atualizar senha do admin no Supabase Auth:", updateError.message);
+      } else {
+        console.log(`Senha do admin ${adminEmail} atualizada/definida com sucesso!`);
+      }
     }
   } catch (err) {
     console.error("Erro inesperado no seed do admin:", err.message);
