@@ -1,0 +1,92 @@
+{
+  "insurers": [
+    {
+      "id": "ins-porto",
+      "name": "Porto Seguro",
+      "assistance_phone": "0800-727-0800",
+      "assistance_whatsapp": "551130039303",
+      "claims_phone": "3337-6786",
+      "claims_url": "https://www.portoseguro.com.br/sinistro"
+    },
+    {
+      "id": "ins-yelum",
+      "name": "Yelum",
+      "assistance_phone": "0800-701-4120",
+      "assistance_whatsapp": "5511995821234",
+      "claims_phone": "0800-701-4121",
+      "claims_url": "https://www.yelum.com.br/servicos/sinistro"
+    },
+    {
+      "id": "ins-bradesco",
+      "name": "Bradesco Seguros",
+      "assistance_phone": "0800-701-2757",
+      "assistance_whatsapp": "5511988880000",
+      "claims_phone": "4004-2757",
+      "claims_url": "https://www.bradescoseguros.com.br/sinistro"
+    },
+    {
+      "id": "ins-hdi",
+      "name": "HDI Seguros",
+      "assistance_phone": "0800-722-7149",
+      "assistance_whatsapp": "5511999991234",
+      "claims_phone": "3003-5390",
+      "claims_url": "https://www.hdiseguros.com.br/sinistro"
+    },
+    {
+      "id": "ins-allianz",
+      "name": "Allianz Seguros",
+      "assistance_phone": "0800-013-0700",
+      "assistance_whatsapp": "5511977771111",
+      "claims_phone": "3156-4340",
+      "claims_url": "https://www.allianz.com.br/sinistro"
+    }
+  ],
+  "clients": [
+    {
+      "id": "cli-1",
+      "name": "Carlos Eduardo da Silva",
+      "cpf_cnpj": "123.456.789-00"
+    },
+    {
+      "id": "cli-2",
+      "name": "Maria Fernanda Santos",
+      "cpf_cnpj": "987.654.321-11"
+    }
+  ],
+  "policies": [
+    {
+      "id": "pol-1",
+      "client_id": "cli-1",
+      "insurer_id": "ins-porto",
+      "policy_number": "100200300444",
+      "start_date": "2025-01-15",
+      "end_date": "2026-01-15",
+      "drive_file_id": "drive-file-mock-1"
+    },
+    {
+      "id": "pol-2",
+      "client_id": "cli-2",
+      "insurer_id": "ins-yelum",
+      "policy_number": "9988776655",
+      "start_date": "2025-06-10",
+      "end_date": "2026-06-10",
+      "drive_file_id": "drive-file-mock-2"
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "veh-1",
+      "policy_id": "pol-1",
+      "plate": "ABC1D23",
+      "brand_model": "Honda Civic Touring 1.5 Turbo",
+      "year": 2021
+    },
+    {
+      "id": "veh-2",
+      "policy_id": "pol-2",
+      "plate": "BRA2E19",
+      "brand_model": "Jeep Compass Longitude 2.0 Turboflex",
+      "year": 2022
+    }
+  ]
+}
