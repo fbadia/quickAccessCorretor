@@ -17,12 +17,11 @@ export function getDriveClient(serviceAccountJsonString) {
     // Substituir quebras de linha na chave privada caso existam (comum em envs)
     const privateKey = credentials.private_key.replace(/\\n/g, "\n");
 
-    const auth = new google.auth.JWT(
-      credentials.client_email,
-      null,
-      privateKey,
-      ["https://www.googleapis.com/auth/drive.readonly"]
-    );
+    const auth = new google.auth.JWT({
+      email: credentials.client_email,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+    });
 
     return google.drive({ version: "v3", auth });
   } catch (error) {
