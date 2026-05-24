@@ -12,12 +12,14 @@ export async function extractPolicyData(pdfBuffer, apiKey) {
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    generationConfig: {
-      responseMimeType: "application/json",
-    },
-  });
+  
+  // Converter o Buffer do PDF para a estrutura de dados inline do Gemini API
+  const pdfPart = {
+    inlineData: {
+      data: pdfBuffer.toString("base64"),
+      mimeType: "application/pdf"
+    }
+  };
 
   const prompt = `
     Você é um especialista em extração de dados de apólices de seguros brasileiras (foco em automóvel).
@@ -49,23 +51,55 @@ export async function extractPolicyData(pdfBuffer, apiKey) {
     3. Para a seguradora Yelum, lembre-se de que ela pode aparecer como "Yelum", "Yelum Seguros", "Liberty Seguros" ou "Liberty". Normalize para "Yelum".
   `;
 
-  // Converter o Buffer do PDF para a estrutura de dados inline do Gemini API
-  const pdfPart = {
-    inlineData: {
-      data: pdfBuffer.toString("base64"),
-      mimeType: "application/pdf"
-    }
-  };
+  let modelName = "gemini-1.5-flash";
+  let responseText;
 
   try {
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    });
+
     const result = await model.generateContent([prompt, pdfPart]);
-    const responseText = result.response.text();
-    
-    // Fazer parse do JSON retornado
+    responseText = result.response.text();
+  } catch (error) {
+    const isModelNotFoundError = error.message && (
+      error.message.includes("not found") || 
+      error.message.includes("404") ||
+      error.message.includes("not supported")
+    );
+
+    if (isModelNotFoundError) {
+      console.warn(`[Gemini] Modelo ${modelName} indisponível. Tentando fallback para a versão mais barata (gemini-flash-lite-latest)...`);
+      modelName = "gemini-flash-lite-latest";
+      
+      try {
+        const fallbackModel = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        });
+        
+        const result = await fallbackModel.generateContent([prompt, pdfPart]);
+        responseText = result.response.text();
+      } catch (fallbackError) {
+        console.error(`[Gemini] Falha também no modelo de fallback ${modelName}:`, fallbackError);
+        throw new Error(`Falha na extração de dados com Gemini (ambos os modelos falharam): ${fallbackError.message}`);
+      }
+    } else {
+      console.error("Erro na chamada da API do Gemini:", error);
+      throw new Error(`Falha na extração de dados com Gemini: ${error.message}`);
+    }
+  }
+
+  try {
     const extractedData = JSON.parse(responseText);
     return extractedData;
-  } catch (error) {
-    console.error("Erro na chamada da API do Gemini:", error);
-    throw new Error(`Falha na extração de dados com Gemini: ${error.message}`);
+  } catch (parseError) {
+    console.error("Erro ao parsear JSON retornado pelo Gemini:", parseError, "Resposta:", responseText);
+    throw new Error(`Resposta do Gemini inválida ou mal-formatada: ${parseError.message}`);
   }
 }
