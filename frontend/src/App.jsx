@@ -18,7 +18,9 @@ import {
   Sun,
   Moon,
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  Lock,
+  LogIn
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -27,6 +29,9 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authMode, setAuthMode] = useState("login"); // "login" ou "signup"
   const [authLoading, setAuthLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState(null);
   
@@ -208,29 +213,45 @@ export default function App() {
     }
   };
 
-  // Enviar link mágico de login
-  const handleLogin = async (e) => {
+  // Autenticação por E-mail e Senha (Login e Cadastro)
+  const handleAuth = async (e) => {
     e.preventDefault();
-    if (!authEmail) return;
+    if (!authEmail || !authPassword || (authMode === "signup" && !authName)) return;
 
     setAuthLoading(true);
     setAuthMessage(null);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: authEmail,
-        options: {
-          emailRedirectTo: window.location.origin,
-        }
-      });
-      if (error) throw error;
-      setAuthMessage({
-        type: "success",
-        text: "Verifique sua caixa de entrada! Enviamos um link de acesso."
-      });
+      if (authMode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        showToast("Login realizado com sucesso!");
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+          options: {
+            data: {
+              name: authName,
+              role: "broker", // papel padrão do novo corretor
+            }
+          }
+        });
+        if (error) throw error;
+        setAuthMessage({
+          type: "success",
+          text: "Cadastro realizado com sucesso! Se o Supabase exigir confirmação, verifique seu e-mail."
+        });
+        // Limpar campos de cadastro
+        setAuthName("");
+        setAuthPassword("");
+      }
     } catch (err) {
       setAuthMessage({
         type: "error",
-        text: err.message || "Ocorreu um erro ao enviar o link mágico."
+        text: err.message || "Ocorreu um erro no processo de autenticação."
       });
     } finally {
       setAuthLoading(false);
@@ -396,11 +417,32 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         <div className="auth-page">
           <div className="auth-card">
             <div className="auth-header">
-              <h1 className="auth-title">Acesso Corretor</h1>
-              <p className="auth-subtitle">Digite seu e-mail para receber um link de acesso instantâneo.</p>
+              <h1 className="auth-title">
+                {authMode === "login" ? "Acesso Corretor" : "Criar Conta"}
+              </h1>
+              <p className="auth-subtitle">
+                {authMode === "login" 
+                  ? "Digite seu e-mail e senha para entrar no sistema." 
+                  : "Preencha os dados abaixo para cadastrar-se como corretor."}
+              </p>
             </div>
             
-            <form onSubmit={handleLogin}>
+            <form onSubmit={handleAuth}>
+              {authMode === "signup" && (
+                <div className="form-group">
+                  <label className="form-label" htmlFor="name">Nome Completo</label>
+                  <input 
+                    id="name"
+                    type="text"
+                    placeholder="ex: Lucas Martins"
+                    className="form-input"
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+
               <div className="form-group">
                 <label className="form-label" htmlFor="email">E-mail Corporativo</label>
                 <input 
@@ -413,12 +455,88 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                   required
                 />
               </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="password">Senha</label>
+                <input 
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  className="form-input"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  minLength={6}
+                  required
+                />
+              </div>
               
               <button type="submit" className="primary-btn" disabled={authLoading}>
-                {authLoading ? <RefreshCw className="animate-spin" size={20} /> : <Mail size={20} />}
-                {authLoading ? "Enviando..." : "Receber Link de Acesso"}
+                {authLoading ? (
+                  <RefreshCw className="animate-spin" size={20} />
+                ) : authMode === "login" ? (
+                  <LogIn size={20} />
+                ) : (
+                  <UserPlus size={20} />
+                )}
+                {authLoading 
+                  ? "Processando..." 
+                  : authMode === "login" 
+                    ? "Entrar" 
+                    : "Cadastrar-se"}
               </button>
             </form>
+
+            <div style={{ marginTop: "20px", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
+              {authMode === "login" ? (
+                <span>
+                  Não tem uma conta?{" "}
+                  <button 
+                    type="button" 
+                    onClick={() => { 
+                      setAuthMode("signup"); 
+                      setAuthMessage(null); 
+                      setAuthPassword("");
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--accent-color)",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      padding: 0,
+                      textDecoration: "underline",
+                      fontFamily: "var(--font-family)"
+                    }}
+                  >
+                    Cadastre-se
+                  </button>
+                </span>
+              ) : (
+                <span>
+                  Já tem uma conta?{" "}
+                  <button 
+                    type="button" 
+                    onClick={() => { 
+                      setAuthMode("login"); 
+                      setAuthMessage(null); 
+                      setAuthPassword("");
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--accent-color)",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      padding: 0,
+                      textDecoration: "underline",
+                      fontFamily: "var(--font-family)"
+                    }}
+                  >
+                    Entrar
+                  </button>
+                </span>
+              )}
+            </div>
 
             {authMessage && (
               <div style={{
@@ -433,7 +551,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                 alignItems: "center"
               }}>
                 {authMessage.type === "success" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-                <span>{authMessage.text}</span>
+                <span style={{ textAlign: "left" }}>{authMessage.text}</span>
               </div>
             )}
           </div>
