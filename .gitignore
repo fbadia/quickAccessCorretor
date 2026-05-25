@@ -39,3 +39,7 @@ pnpm-debug.log*
 pentest_quickaccess.py
 pentest_report_*.md
 
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

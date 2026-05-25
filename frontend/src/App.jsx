@@ -20,9 +20,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lock,
-  LogIn
+  LogIn,
+  FileText
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import { useRegisterSW } from "virtual:pwa-register/react";
 
 export default function App() {
   // Authentication states
@@ -57,6 +59,7 @@ export default function App() {
   // UI states
   const [theme, setTheme] = useState("dark");
   const [toast, setToast] = useState(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   // Monitorar estado de autenticação
   useEffect(() => {
@@ -152,6 +155,7 @@ export default function App() {
           policy:policies (
             id,
             policy_number,
+            drive_file_id,
             start_date,
             end_date,
             client:clients (
@@ -293,6 +297,41 @@ Nº Apólice: ${p?.policy_number || "N/A"}
 Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
     copyToClipboard(summary, "Resumo da apólice");
+  };
+
+  // Abrir o PDF da apólice em nova aba (via proxy autenticado no backend)
+  const handleViewPdf = async (policyId) => {
+    if (!policyId || !session?.access_token) return;
+    setPdfLoading(true);
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const res = await fetch(`${backendUrl}/api/policies/${policyId}/download`, {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`
+        }
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erro ao obter o PDF");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const newTab = window.open(url, "_blank");
+      // Liberar a URL temporária após a aba abrir
+      if (newTab) {
+        newTab.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+      } else {
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast("Habilite popups neste site para visualizar o PDF.", "error");
+      }
+    } catch (err) {
+      console.error("Erro ao abrir PDF:", err.message);
+      showToast(err.message || "Não foi possível abrir o PDF.", "error");
+    } finally {
+      setPdfLoading(false);
+    }
   };
 
   // Disparar sincronização no backend
@@ -844,10 +883,26 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                 <Copy size={18} />
                 Copiar Resumo para WhatsApp
               </button>
+
+              {selectedVehicle.policy?.drive_file_id && (
+                <button
+                  id="btn-view-pdf"
+                  onClick={() => handleViewPdf(selectedVehicle.policy.id)}
+                  className="secondary-btn"
+                  disabled={pdfLoading}
+                  style={{ opacity: pdfLoading ? 0.7 : 1 }}
+                >
+                  <FileText size={18} />
+                  {pdfLoading ? "Carregando PDF..." : "Visualizar Apólice (PDF)"}
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
+
+      {/* PWA UPDATE BANNER */}
+      <PWAUpdateBanner />
 
       {/* TOAST POPUP */}
       {toast && (
@@ -856,6 +911,114 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
           <span>{toast.message}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------
+// Componente PWA — Banner de atualização disponível
+// -------------------------------------------------------
+function PWAUpdateBanner() {
+  const {
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegistered(r) {
+      console.log("[PWA] Service Worker registrado:", r);
+    },
+    onRegisterError(error) {
+      console.error("[PWA] Erro ao registrar Service Worker:", error);
+    },
+  });
+
+  const handleUpdate = () => {
+    updateServiceWorker(true);
+  };
+
+  const handleDismiss = () => {
+    setNeedRefresh(false);
+  };
+
+  if (!needRefresh) return null;
+
+  return (
+    <div style={{
+      position: "fixed",
+      bottom: "1.5rem",
+      left: "50%",
+      transform: "translateX(-50%)",
+      zIndex: 9999,
+      display: "flex",
+      alignItems: "center",
+      gap: "0.75rem",
+      padding: "0.875rem 1.25rem",
+      background: "linear-gradient(135deg, #1e1e2e 0%, #2a1f3d 100%)",
+      border: "1px solid rgba(134, 59, 255, 0.4)",
+      borderRadius: "1rem",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(134,59,255,0.15)",
+      backdropFilter: "blur(12px)",
+      animation: "slideUpBanner 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)",
+      maxWidth: "calc(100vw - 2rem)",
+      whiteSpace: "nowrap",
+    }}>
+      <style>{`
+        @keyframes slideUpBanner {
+          from { opacity: 0; transform: translateX(-50%) translateY(1.5rem); }
+          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+      `}</style>
+
+      <span style={{ fontSize: "1.25rem" }}>🚀</span>
+
+      <span style={{
+        color: "#e0d4ff",
+        fontSize: "0.9rem",
+        fontWeight: 500,
+      }}>
+        Nova versão disponível!
+      </span>
+
+      <button
+        id="pwa-update-btn"
+        onClick={handleUpdate}
+        style={{
+          background: "linear-gradient(135deg, #863bff, #6a2dd4)",
+          color: "#fff",
+          border: "none",
+          borderRadius: "0.6rem",
+          padding: "0.45rem 1rem",
+          fontSize: "0.85rem",
+          fontWeight: 600,
+          cursor: "pointer",
+          transition: "opacity 0.2s",
+          whiteSpace: "nowrap",
+        }}
+        onMouseOver={e => e.currentTarget.style.opacity = "0.85"}
+        onMouseOut={e => e.currentTarget.style.opacity = "1"}
+      >
+        Atualizar
+      </button>
+
+      <button
+        id="pwa-dismiss-btn"
+        onClick={handleDismiss}
+        title="Dispensar"
+        style={{
+          background: "transparent",
+          color: "#9880cc",
+          border: "none",
+          borderRadius: "0.4rem",
+          padding: "0.3rem 0.5rem",
+          fontSize: "1rem",
+          cursor: "pointer",
+          lineHeight: 1,
+          transition: "color 0.2s",
+        }}
+        onMouseOver={e => e.currentTarget.style.color = "#e0d4ff"}
+        onMouseOut={e => e.currentTarget.style.color = "#9880cc"}
+      >
+        ✕
+      </button>
     </div>
   );
 }

@@ -220,6 +220,74 @@ app.post("/admin/users", async (req, res) => {
   }
 });
 
+// Rota para download/visualização inline do PDF de uma apólice via Google Drive
+app.get("/api/policies/:policyId/download", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Cabeçalho de autorização ausente." });
+  }
+
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ error: "Token de autenticação ausente." });
+  }
+
+  try {
+    // 1. Validar o token JWT do usuário
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Sessão inválida ou expirada." });
+    }
+
+    // 2. Verificar que o usuário tem perfil válido (broker ou admin)
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (profileError || !profile || !["admin", "broker"].includes(profile.role)) {
+      return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    // 3. Buscar o drive_file_id da apólice pelo ID fornecido
+    const { policyId } = req.params;
+    const { data: policy, error: policyError } = await supabase
+      .from("policies")
+      .select("drive_file_id, policy_number")
+      .eq("id", policyId)
+      .maybeSingle();
+
+    if (policyError || !policy) {
+      return res.status(404).json({ error: "Apólice não encontrada." });
+    }
+
+    if (!policy.drive_file_id) {
+      return res.status(404).json({ error: "Esta apólice não possui um arquivo PDF associado." });
+    }
+
+    if (!drive) {
+      return res.status(503).json({ error: "Integração com Google Drive não configurada no servidor." });
+    }
+
+    // 4. Baixar o PDF via Google Drive (Service Account) e enviar como stream inline
+    console.log(`[PDF] Usuário ${user.email} solicitou visualização da apólice ${policy.policy_number}`);
+    const pdfBuffer = await downloadFile(drive, policy.drive_file_id);
+
+    const safeFileName = `apolice-${policy.policy_number || policyId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${safeFileName}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.setHeader("Cache-Control", "private, no-store");
+
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("Erro ao baixar PDF da apólice:", err.message);
+    return res.status(500).json({ error: "Erro ao obter o arquivo PDF." });
+  }
+});
+
 // Retorna o status da sincronização
 app.get("/sync/status", (req, res) => {
   res.json(syncState);
