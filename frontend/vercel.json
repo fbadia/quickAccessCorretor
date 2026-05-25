@@ -4,6 +4,10 @@
       "source": "/(.*)",
       "headers": [
         {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://quick-access-corretor.vercel.app"
+        },
+        {
           "key": "X-Frame-Options",
           "value": "DENY"
         },
