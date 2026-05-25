@@ -12,7 +12,21 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middlewares
-app.use(cors());
+// Configurar CORS seguro restringindo origens para localhost e Vercel
+const allowedOriginRegex = /^(https:\/\/quick-access-corretor\.vercel\.app|https:\/\/.*\.vercel\.app|http:\/\/localhost:\d+)$/;
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Permite requisições sem Origin (como aplicativos mobile ou ferramentas de teste como Curl/Postman)
+    if (!origin) return callback(null, true);
+    if (allowedOriginRegex.test(origin)) {
+      return callback(null, true);
+    }
+    const msg = 'A política CORS deste servidor não permite acesso da origem informada.';
+    return callback(new Error(msg), false);
+  },
+  credentials: true
+}));
 app.use(express.json());
 
 // Estado de sincronização na memória (para o MVP)
