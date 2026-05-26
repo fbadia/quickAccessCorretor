@@ -1,199 +1,480 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { getDriveClient, listPdfFiles, downloadFile } from "./driveService.js";
+import { getDriveClient, listPdfFiles, downloadFile, createOrganizationFolder } from "./driveService.js";
 import { extractPolicyData } from "./geminiService.js";
-import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedAdminUser } from "./dbService.js";
+import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedSuperAdmin } from "./dbService.js";
 
-// Carregar variáveis de ambiente
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Middlewares
-// Configurar CORS seguro restringindo origens para localhost e Vercel
+// ─────────────────────────────────────────────────────────────
+// CORS
+// ─────────────────────────────────────────────────────────────
 const allowedOriginRegex = /^(https:\/\/quick-access-corretor\.vercel\.app|https:\/\/.*\.vercel\.app|http:\/\/localhost:\d+)$/;
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Permite requisições sem Origin (como aplicativos mobile ou ferramentas de teste como Curl/Postman)
     if (!origin) return callback(null, true);
-    if (allowedOriginRegex.test(origin)) {
-      return callback(null, true);
-    }
-    const msg = 'A política CORS deste servidor não permite acesso da origem informada.';
-    return callback(new Error(msg), false);
+    if (allowedOriginRegex.test(origin)) return callback(null, true);
+    return callback(new Error("Origem não permitida pelo CORS."), false);
   },
   credentials: true
 }));
 app.use(express.json());
 
-// Estado de sincronização na memória (para o MVP)
-let syncState = {
-  status: "idle", // idle, running, completed, failed
-  lastRun: null,
-  totalFiles: 0,
-  processedFiles: 0,
-  successCount: 0,
-  failCount: 0,
-  skippedCount: 0,
-  errors: []
-};
-
-// Inicializar clientes
+// ─────────────────────────────────────────────────────────────
+// INICIALIZAÇÃO DE CLIENTES
+// ─────────────────────────────────────────────────────────────
 let supabase;
 let drive;
 
 try {
   supabase = getSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-  
+
   if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     drive = getDriveClient(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   } else {
-    console.warn("GOOGLE_SERVICE_ACCOUNT_JSON não configurado. Sincronização automática indisponível.");
+    console.warn("GOOGLE_SERVICE_ACCOUNT_JSON não configurado. Sincronização indisponível.");
   }
 
-  // Executar seed das seguradoras
-  seedInsurers(supabase);
-
-  // Executar seed do usuário administrador padrão
-  seedAdminUser(supabase);
+  seedSuperAdmin(supabase);
 } catch (error) {
-  console.error("Erro na inicialização dos clientes de serviços:", error.message);
+  console.error("Erro na inicialização:", error.message);
 }
 
+// ─────────────────────────────────────────────────────────────
+// MIDDLEWARE DE AUTENTICAÇÃO
+// ─────────────────────────────────────────────────────────────
+
 /**
- * Função principal que realiza a rotina de sincronização de arquivos.
+ * Autentica o Bearer token e anexa user + profile ao req.
+ * Rejeita se token inválido, perfil inexistente, usuário ou org desabilitados.
  */
-async function runSyncJob() {
-  if (syncState.status === "running") {
-    console.log("Sincronização já está em execução.");
-    return;
-  }
+async function authenticate(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Cabeçalho de autorização ausente." });
 
-  if (!drive || !supabase) {
-    console.error("Clientes Drive ou Supabase não configurados corretamente.");
-    return;
-  }
-
-  syncState = {
-    status: "running",
-    lastRun: new Date().toISOString(),
-    totalFiles: 0,
-    processedFiles: 0,
-    successCount: 0,
-    failCount: 0,
-    skippedCount: 0,
-    errors: []
-  };
+  const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Token ausente." });
 
   try {
-    console.log("Iniciando varredura no Google Drive...");
-    const files = await listPdfFiles(drive, process.env.GOOGLE_DRIVE_FOLDER_ID);
-    syncState.totalFiles = files.length;
-    console.log(`Encontrados ${files.length} arquivos PDF na pasta do Google Drive.`);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) return res.status(401).json({ error: "Sessão inválida ou expirada." });
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, role, organization_id, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) return res.status(401).json({ error: "Perfil não encontrado." });
+    if (!profile.is_active) return res.status(403).json({ error: "Usuário desabilitado." });
+
+    // Verificar se a org está ativa (exceto para superadmin)
+    if (profile.role !== "superadmin" && profile.organization_id) {
+      const { data: org } = await supabase
+        .from("organizations")
+        .select("status")
+        .eq("id", profile.organization_id)
+        .maybeSingle();
+
+      if (!org || org.status !== "active") {
+        return res.status(403).json({ error: "Organização desabilitada ou não encontrada." });
+      }
+    }
+
+    req.user = user;
+    req.profile = profile;
+    next();
+  } catch (err) {
+    console.error("Erro no middleware de autenticação:", err.message);
+    res.status(500).json({ error: "Erro interno de autenticação." });
+  }
+}
+
+/** Garante que o usuário autenticado é superadmin. */
+function requireSuperAdmin(req, res, next) {
+  if (req.profile?.role !== "superadmin") {
+    return res.status(403).json({ error: "Acesso restrito a superadmins." });
+  }
+  next();
+}
+
+/** Garante que o usuário autenticado é admin de org. */
+function requireOrgAdmin(req, res, next) {
+  if (req.profile?.role !== "admin") {
+    return res.status(403).json({ error: "Acesso restrito a administradores de organização." });
+  }
+  next();
+}
+
+// ─────────────────────────────────────────────────────────────
+// ESTADO DE SINCRONIZAÇÃO (em memória por org)
+// ─────────────────────────────────────────────────────────────
+const syncStates = {}; // { [orgId]: syncState }
+
+function getSyncState(orgId) {
+  if (!syncStates[orgId]) {
+    syncStates[orgId] = {
+      status: "idle",
+      lastRun: null,
+      totalFiles: 0,
+      processedFiles: 0,
+      successCount: 0,
+      failCount: 0,
+      skippedCount: 0,
+      errors: []
+    };
+  }
+  return syncStates[orgId];
+}
+
+// ─────────────────────────────────────────────────────────────
+// FUNÇÃO DE SINCRONIZAÇÃO (org-aware)
+// ─────────────────────────────────────────────────────────────
+async function runSyncJobForOrg(orgId, driveFolderId) {
+  const state = getSyncState(orgId);
+
+  if (state.status === "running") {
+    console.log(`[Sync] Org ${orgId} já está sincronizando.`);
+    return;
+  }
+  if (!drive || !supabase) {
+    console.error("[Sync] Clientes não configurados.");
+    return;
+  }
+  if (!driveFolderId) {
+    console.warn(`[Sync] Org ${orgId} sem pasta do Drive configurada. Pulando.`);
+    return;
+  }
+
+  Object.assign(state, {
+    status: "running",
+    lastRun: new Date().toISOString(),
+    totalFiles: 0, processedFiles: 0,
+    successCount: 0, failCount: 0, skippedCount: 0,
+    errors: []
+  });
+
+  const syncStart = new Date().toISOString();
+
+  try {
+    console.log(`[Sync] Iniciando para org ${orgId}...`);
+    const files = await listPdfFiles(drive, driveFolderId);
+    state.totalFiles = files.length;
+    console.log(`[Sync] Org ${orgId}: ${files.length} PDFs encontrados.`);
 
     for (const file of files) {
-      syncState.processedFiles++;
-      const fileId = file.id;
-      const fileName = file.name;
+      state.processedFiles++;
+      const { id: fileId, name: fileName } = file;
 
-      console.log(`[${syncState.processedFiles}/${syncState.totalFiles}] Verificando: ${fileName}`);
-
-      // 1. Verificar se já foi processado
-      const processed = await isFileProcessed(supabase, fileId);
+      const processed = await isFileProcessed(supabase, fileId, orgId);
       if (processed) {
-        console.log(`-> Arquivo já processado anteriormente. Pulando.`);
-        syncState.skippedCount++;
+        state.skippedCount++;
         continue;
       }
 
       try {
-        console.log(`-> Baixando arquivo ${fileName}...`);
         const pdfBuffer = await downloadFile(drive, fileId);
-
-        console.log(`-> Enviando para análise do Gemini...`);
         const extractedData = await extractPolicyData(pdfBuffer, process.env.GEMINI_API_KEY);
-
-        console.log(`-> Salvando dados no Supabase...`);
-        await savePolicyData(supabase, fileId, extractedData);
-        
-        syncState.successCount++;
+        await savePolicyData(supabase, fileId, extractedData, orgId);
+        state.successCount++;
       } catch (err) {
-        console.error(`Erro ao processar o arquivo ${fileName}:`, err.message);
-        syncState.failCount++;
-        syncState.errors.push({
-          file: fileName,
-          error: err.message,
-          timestamp: new Date().toISOString()
-        });
+        console.error(`[Sync] Erro em ${fileName}:`, err.message);
+        state.failCount++;
+        state.errors.push({ file: fileName, error: err.message, timestamp: new Date().toISOString() });
       }
     }
 
-    syncState.status = "completed";
-    console.log(`Sincronização concluída. Sucessos: ${syncState.successCount}, Falhas: ${syncState.failCount}, Pulados: ${syncState.skippedCount}`);
+    state.status = "completed";
+
+    // Atualizar last_sync na org
+    await supabase
+      .from("organizations")
+      .update({
+        last_sync_at: syncStart,
+        last_sync_status: state.failCount > 0 && state.successCount === 0 ? "error" : "ok"
+      })
+      .eq("id", orgId);
+
+    console.log(`[Sync] Org ${orgId}: OK (${state.successCount} sucesso, ${state.failCount} falha, ${state.skippedCount} pulados)`);
   } catch (error) {
-    console.error("Falha geral na sincronização:", error);
-    syncState.status = "failed";
-    syncState.errors.push({
-      file: "system",
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
+    console.error(`[Sync] Falha geral para org ${orgId}:`, error.message);
+    state.status = "failed";
+    state.errors.push({ file: "system", error: error.message, timestamp: new Date().toISOString() });
+
+    await supabase
+      .from("organizations")
+      .update({ last_sync_at: syncStart, last_sync_status: "error" })
+      .eq("id", orgId);
   }
 }
 
-// -----------------------------------------------------
-// ROTAS HTTP
-// -----------------------------------------------------
+/** Executa sync para todas as orgs ativas (polling automático). */
+async function runSyncAllOrgs() {
+  try {
+    const { data: orgs } = await supabase
+      .from("organizations")
+      .select("id, drive_folder_id")
+      .eq("status", "active")
+      .not("drive_folder_id", "is", null);
 
-// Rota de Health Check
+    if (!orgs || orgs.length === 0) return;
+
+    for (const org of orgs) {
+      await runSyncJobForOrg(org.id, org.drive_folder_id);
+    }
+  } catch (err) {
+    console.error("[Sync] Erro no sync global:", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ROTAS
+// ─────────────────────────────────────────────────────────────
+
+// Health check
 app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Servidor QuickAccessCorretor está ativo e operando.",
-    timestamp: new Date().toISOString()
-  });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Rota para o Admin criar um novo usuário (sem e-mail de confirmação e definindo senha)
-app.post("/admin/users", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ error: "Cabeçalho de autorização ausente." });
-  }
+// ─────────────────────────────────────────────────────────────
+// ROTAS SUPERADMIN (/superadmin/*)
+// ─────────────────────────────────────────────────────────────
 
-  const token = authHeader.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ error: "Token de autenticação ausente." });
+/** GET /superadmin/metrics — Dashboard com métricas agregadas */
+app.get("/superadmin/metrics", authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const { data: orgs, error: orgsError } = await supabase
+      .from("organizations")
+      .select("id, name, status, drive_folder_id, last_sync_at, last_sync_status, created_at");
+
+    if (orgsError) throw orgsError;
+
+    // Contagem de usuários por org
+    const { data: userCounts, error: ucError } = await supabase
+      .from("profiles")
+      .select("organization_id")
+      .not("organization_id", "is", null);
+    if (ucError) throw ucError;
+
+    // Contagem de apólices por org
+    const { data: policyCounts, error: pcError } = await supabase
+      .from("policies")
+      .select("organization_id");
+    if (pcError) throw pcError;
+
+    const userCountMap = {};
+    for (const p of userCounts) {
+      userCountMap[p.organization_id] = (userCountMap[p.organization_id] || 0) + 1;
+    }
+
+    const policyCountMap = {};
+    for (const p of policyCounts) {
+      policyCountMap[p.organization_id] = (policyCountMap[p.organization_id] || 0) + 1;
+    }
+
+    const enrichedOrgs = orgs.map(org => ({
+      ...org,
+      user_count: userCountMap[org.id] || 0,
+      policy_count: policyCountMap[org.id] || 0,
+      drive_configured: !!org.drive_folder_id
+    }));
+
+    res.json({
+      total_organizations: orgs.length,
+      active_organizations: orgs.filter(o => o.status === "active").length,
+      organizations: enrichedOrgs
+    });
+  } catch (err) {
+    console.error("Erro ao buscar métricas:", err.message);
+    res.status(500).json({ error: "Erro ao buscar métricas." });
+  }
+});
+
+/** POST /superadmin/organizations — Cria nova organização + pasta no Drive */
+app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: "Nome da organização é obrigatório." });
+
+  try {
+    // Criar a pasta no Drive
+    let driveFolderId = null;
+    if (drive && process.env.GOOGLE_DRIVE_FOLDER_ID) {
+      try {
+        driveFolderId = await createOrganizationFolder(drive, name.trim(), process.env.GOOGLE_DRIVE_FOLDER_ID);
+      } catch (driveErr) {
+        console.error("Erro ao criar pasta no Drive:", driveErr.message);
+        // Não bloquear criação da org se Drive falhar
+      }
+    }
+
+    const { data: org, error } = await supabase
+      .from("organizations")
+      .insert({
+        name: name.trim(),
+        status: "active",
+        drive_folder_id: driveFolderId
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log(`[SuperAdmin] Organização "${name}" criada (ID: ${org.id})`);
+    res.status(201).json({ message: "Organização criada com sucesso.", organization: org });
+  } catch (err) {
+    console.error("Erro ao criar organização:", err.message);
+    res.status(500).json({ error: "Erro ao criar organização." });
+  }
+});
+
+/** PATCH /superadmin/organizations/:orgId/status — Habilita/desabilita organização */
+app.patch("/superadmin/organizations/:orgId/status", authenticate, requireSuperAdmin, async (req, res) => {
+  const { orgId } = req.params;
+  const { status } = req.body;
+
+  if (!["active", "disabled"].includes(status)) {
+    return res.status(400).json({ error: "Status inválido. Use 'active' ou 'disabled'." });
   }
 
   try {
-    // 1. Verificar o token do usuário usando o cliente Supabase
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return res.status(401).json({ error: "Sessão inválida ou expirada." });
-    }
+    const { data, error } = await supabase
+      .from("organizations")
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", orgId)
+      .select()
+      .single();
 
-    // 2. Verificar se o usuário autenticado é um administrador
-    const { data: profile, error: profileError } = await supabase
+    if (error) throw error;
+    console.log(`[SuperAdmin] Org ${orgId} → status: ${status}`);
+    res.json({ message: `Organização ${status === "active" ? "habilitada" : "desabilitada"}.`, organization: data });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao atualizar status da organização." });
+  }
+});
+
+/** PATCH /superadmin/users/:userId/status — Habilita/desabilita usuário */
+app.patch("/superadmin/users/:userId/status", authenticate, requireSuperAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { is_active } = req.body;
+
+  if (typeof is_active !== "boolean") {
+    return res.status(400).json({ error: "is_active deve ser boolean." });
+  }
+
+  try {
+    const { data, error } = await supabase
       .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle();
+      .update({ is_active })
+      .eq("id", userId)
+      .neq("role", "superadmin") // Não permite desabilitar outros superadmins
+      .select()
+      .single();
 
-    if (profileError || !profile || profile.role !== "admin") {
-      return res.status(403).json({ error: "Acesso negado. Apenas administradores podem criar usuários." });
+    if (error) throw error;
+    res.json({ message: `Usuário ${is_active ? "habilitado" : "desabilitado"}.`, profile: data });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao atualizar status do usuário." });
+  }
+});
+
+/** POST /superadmin/superadmins — Adiciona novo superadmin */
+app.post("/superadmin/superadmins", authenticate, requireSuperAdmin, async (req, res) => {
+  const { email, password, name } = req.body;
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: "email, password e name são obrigatórios." });
+  }
+
+  try {
+    const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name, role: "superadmin" }
+    });
+
+    if (createError) return res.status(400).json({ error: createError.message });
+
+    // Garantir role superadmin no profile (trigger pode criar com role padrão)
+    await supabase
+      .from("profiles")
+      .update({ role: "superadmin", organization_id: null })
+      .eq("id", newUser.user.id);
+
+    res.status(201).json({ message: "SuperAdmin criado.", user: { id: newUser.user.id, email, name } });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao criar superadmin." });
+  }
+});
+
+/** GET /superadmin/users — Lista todos os usuários de todas as orgs */
+app.get("/superadmin/users", authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, email, name, role, organization_id, is_active, created_at")
+      .neq("role", "superadmin")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao listar usuários." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// ROTAS ADMIN DE ORG (/admin/*)
+// ─────────────────────────────────────────────────────────────
+
+/** GET /admin/users — Lista usuários da org do admin autenticado */
+app.get("/admin/users", authenticate, requireOrgAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, email, name, role, is_active, created_at")
+      .eq("organization_id", req.profile.organization_id)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao listar usuários da organização." });
+  }
+});
+
+/** POST /admin/users — Convida usuário para a org (máximo 5) */
+app.post("/admin/users", authenticate, requireOrgAdmin, async (req, res) => {
+  const { email, password, name, role } = req.body;
+
+  if (!email || !password || !name || !role) {
+    return res.status(400).json({ error: "Campos obrigatórios: email, password, name, role." });
+  }
+  if (!["admin", "broker"].includes(role)) {
+    return res.status(400).json({ error: "Role inválida. Use 'admin' ou 'broker'." });
+  }
+
+  try {
+    // Verificar limite de 5 usuários por org
+    const { count, error: countError } = await supabase
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", req.profile.organization_id);
+
+    if (countError) throw countError;
+
+    if (count >= 5) {
+      return res.status(409).json({
+        error: "Limite de 5 usuários por organização atingido.",
+        current: count,
+        limit: 5
+      });
     }
 
-    // 3. Obter os dados para criar o novo usuário
-    const { email, password, name, role } = req.body;
-    if (!email || !password || !name || !role) {
-      return res.status(400).json({ error: "Campos obrigatórios ausentes: email, password, name, role." });
-    }
-
-    // 4. Criar o usuário no Supabase Auth usando a API admin (bypass de e-mail de confirmação)
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -201,79 +482,142 @@ app.post("/admin/users", async (req, res) => {
       user_metadata: { name, role }
     });
 
-    if (createError) {
-      return res.status(400).json({ error: createError.message });
-    }
+    if (createError) return res.status(400).json({ error: createError.message });
+
+    // Vincular à organização do admin
+    await supabase
+      .from("profiles")
+      .update({ role, organization_id: req.profile.organization_id })
+      .eq("id", newUser.user.id);
 
     res.status(201).json({
-      message: "Usuário criado com sucesso!",
-      user: {
-        id: newUser.user.id,
-        email: newUser.user.email,
-        name,
-        role
-      }
+      message: "Usuário criado com sucesso.",
+      user: { id: newUser.user.id, email, name, role }
     });
   } catch (err) {
-    console.error("Erro ao criar usuário pelo admin:", err);
-    res.status(500).json({ error: "Erro interno no servidor." });
+    console.error("Erro ao criar usuário:", err.message);
+    res.status(500).json({ error: "Erro interno ao criar usuário." });
   }
 });
 
-// Rota para download/visualização inline do PDF de uma apólice via Google Drive
-app.get("/api/policies/:policyId/download", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ error: "Cabeçalho de autorização ausente." });
-  }
+/** PATCH /admin/users/:userId/role — Altera role de um usuário da org */
+app.patch("/admin/users/:userId/role", authenticate, requireOrgAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { role } = req.body;
 
-  const token = authHeader.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ error: "Token de autenticação ausente." });
+  if (!["admin", "broker"].includes(role)) {
+    return res.status(400).json({ error: "Role inválida. Use 'admin' ou 'broker'." });
   }
 
   try {
-    // 1. Validar o token JWT do usuário
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return res.status(401).json({ error: "Sessão inválida ou expirada." });
-    }
-
-    // 2. Verificar que o usuário tem perfil válido (broker ou admin)
-    const { data: profile, error: profileError } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
-      .select("role")
-      .eq("id", user.id)
+      .update({ role })
+      .eq("id", userId)
+      .eq("organization_id", req.profile.organization_id) // Escopo da org
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Role atualizada.", profile: data });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao atualizar role." });
+  }
+});
+
+/** DELETE /admin/users/:userId — Remove usuário da org */
+app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, res) => {
+  const { userId } = req.params;
+
+  // Impedir auto-exclusão
+  if (userId === req.profile.id) {
+    return res.status(400).json({ error: "Não é possível remover seu próprio usuário." });
+  }
+
+  try {
+    // Verificar que o usuário pertence à org
+    const { data: target } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .eq("organization_id", req.profile.organization_id)
       .maybeSingle();
 
-    if (profileError || !profile || !["admin", "broker"].includes(profile.role)) {
-      return res.status(403).json({ error: "Acesso negado." });
+    if (!target) return res.status(404).json({ error: "Usuário não encontrado na organização." });
+
+    // Deletar do Auth (cascade deleta o profile via trigger)
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
+    if (deleteError) throw deleteError;
+
+    res.json({ message: "Usuário removido com sucesso." });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao remover usuário." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// ROTAS DE SINCRONIZAÇÃO (org-aware)
+// ─────────────────────────────────────────────────────────────
+
+/** GET /sync/status — Status do sync da org do usuário autenticado */
+app.get("/sync/status", authenticate, requireOrgAdmin, async (req, res) => {
+  const orgId = req.profile.organization_id;
+  res.json(getSyncState(orgId));
+});
+
+/** POST /sync — Dispara sync manual para a org do admin autenticado */
+app.post("/sync", authenticate, requireOrgAdmin, async (req, res) => {
+  const orgId = req.profile.organization_id;
+  const state = getSyncState(orgId);
+
+  if (state.status === "running") {
+    return res.status(409).json({ message: "Sincronização já está em andamento.", status: "running" });
+  }
+
+  // Buscar folder_id da org
+  const { data: org } = await supabase
+    .from("organizations")
+    .select("drive_folder_id")
+    .eq("id", orgId)
+    .maybeSingle();
+
+  if (!org?.drive_folder_id) {
+    return res.status(503).json({ error: "Pasta do Google Drive não configurada para esta organização." });
+  }
+
+  runSyncJobForOrg(orgId, org.drive_folder_id);
+
+  res.status(202).json({ message: "Sincronização iniciada.", status: "running" });
+});
+
+// ─────────────────────────────────────────────────────────────
+// ROTA DE DOWNLOAD DE PDF
+// ─────────────────────────────────────────────────────────────
+
+/** GET /api/policies/:policyId/download — Proxy autenticado de PDF via Drive */
+app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
+  try {
+    const { policyId } = req.params;
+    const orgId = req.profile.organization_id;
+
+    // Superadmin não tem org, não pode baixar PDFs de orgs
+    if (!orgId) {
+      return res.status(403).json({ error: "SuperAdmin não tem acesso a dados de organizações." });
     }
 
-    // 3. Buscar o drive_file_id da apólice pelo ID fornecido
-    const { policyId } = req.params;
     const { data: policy, error: policyError } = await supabase
       .from("policies")
-      .select("drive_file_id, policy_number")
+      .select("drive_file_id, policy_number, organization_id")
       .eq("id", policyId)
+      .eq("organization_id", orgId) // Isola por org
       .maybeSingle();
 
-    if (policyError || !policy) {
-      return res.status(404).json({ error: "Apólice não encontrada." });
-    }
+    if (policyError || !policy) return res.status(404).json({ error: "Apólice não encontrada." });
+    if (!policy.drive_file_id) return res.status(404).json({ error: "Apólice sem arquivo PDF associado." });
+    if (!drive) return res.status(503).json({ error: "Integração com Google Drive não configurada." });
 
-    if (!policy.drive_file_id) {
-      return res.status(404).json({ error: "Esta apólice não possui um arquivo PDF associado." });
-    }
-
-    if (!drive) {
-      return res.status(503).json({ error: "Integração com Google Drive não configurada no servidor." });
-    }
-
-    // 4. Baixar o PDF via Google Drive (Service Account) e enviar como stream inline
-    console.log(`[PDF] Usuário ${user.email} solicitou visualização da apólice ${policy.policy_number}`);
+    console.log(`[PDF] Usuário ${req.user.email} → apólice ${policy.policy_number}`);
     const pdfBuffer = await downloadFile(drive, policy.drive_file_id);
-
     const safeFileName = `apolice-${policy.policy_number || policyId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
     res.setHeader("Content-Type", "application/pdf");
@@ -283,43 +627,22 @@ app.get("/api/policies/:policyId/download", async (req, res) => {
 
     return res.send(pdfBuffer);
   } catch (err) {
-    console.error("Erro ao baixar PDF da apólice:", err.message);
+    console.error("Erro ao baixar PDF:", err.message);
     return res.status(500).json({ error: "Erro ao obter o arquivo PDF." });
   }
 });
 
-// Retorna o status da sincronização
-app.get("/sync/status", (req, res) => {
-  res.json(syncState);
-});
+// ─────────────────────────────────────────────────────────────
+// INICIALIZAÇÃO DO SERVIDOR
+// ─────────────────────────────────────────────────────────────
 
-// Força o início de uma sincronização manual (Background)
-app.post("/sync", (req, res) => {
-  if (syncState.status === "running") {
-    return res.status(409).json({
-      message: "Uma sincronização já está em andamento.",
-      status: syncState.status
-    });
-  }
-
-  // Rodar de forma assíncrona para não travar a requisição HTTP
-  runSyncJob();
-
-  res.status(202).json({
-    message: "Sincronização iniciada com sucesso em segundo plano.",
-    status: "running"
-  });
-});
-
-// Inicialização do Servidor
 app.listen(port, () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
 
-  // Configurar polling automático (ex: a cada 10 minutos)
   const intervalMinutes = 10;
-  console.log(`Polling automático ativado: varrendo a pasta a cada ${intervalMinutes} minutos.`);
+  console.log(`Polling automático ativado: a cada ${intervalMinutes} minutos.`);
   setInterval(() => {
-    console.log("Executando sincronização agendada...");
-    runSyncJob();
+    console.log("[Sync] Executando sincronização automática de todas as orgs...");
+    runSyncAllOrgs();
   }, intervalMinutes * 60 * 1000);
 });

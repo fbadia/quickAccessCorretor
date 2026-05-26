@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { useRegisterSW } from "virtual:pwa-register/react";
+import SuperadminDashboard from "./SuperadminDashboard.jsx";
 
 export default function App() {
   // Authentication states
@@ -90,9 +91,12 @@ export default function App() {
   // Buscar dados quando logado
   useEffect(() => {
     if (session && profile) {
-      fetchData();
-      if (profile.role === "admin") {
-        fetchAdminData();
+      // Superadmin não busca dados de apólices (não pertence a org)
+      if (profile.role !== "superadmin") {
+        fetchData();
+        if (profile.role === "admin") {
+          fetchAdminData();
+        }
       }
     }
   }, [session, profile]);
@@ -186,19 +190,22 @@ export default function App() {
     }
   };
 
-  // Buscar dados da área administrativa
+  // Buscar dados da área administrativa (via backend autenticado)
   const fetchAdminData = async () => {
     try {
-      // 1. Buscar lista de corretores
-      const { data: users, error: usersErr } = await supabase
-        .from("profiles")
-        .select("*")
-        .order("name", { ascending: true });
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const token = session?.access_token;
 
-      if (usersErr) throw usersErr;
-      setUsersList(users || []);
+      // 1. Buscar usuários da org via backend (escoped por org)
+      const res = await fetch(`${backendUrl}/admin/users`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const users = await res.json();
+        setUsersList(users || []);
+      }
 
-      // 2. Buscar status da sincronização do backend
+      // 2. Buscar status da sincronização
       fetchBackendSyncStatus();
     } catch (err) {
       console.error("Erro ao buscar dados de admin:", err.message);
@@ -334,23 +341,25 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
   };
 
-  // Disparar sincronização no backend
+  // Disparar sincronização no backend (autenticada, org-aware)
   const triggerBackendSync = async () => {
     setSyncLoading(true);
     try {
       const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
-      const res = await fetch(`${backendUrl}/sync`, { method: "POST" });
+      const token = session?.access_token;
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const res = await fetch(`${backendUrl}/sync`, { method: "POST", headers });
       if (res.ok) {
         showToast("Sincronização iniciada em segundo plano!");
-        // Poll status every 3 seconds while syncing
         const interval = setInterval(async () => {
-          const statusRes = await fetch(`${backendUrl}/sync/status`);
+          const statusRes = await fetch(`${backendUrl}/sync/status`, { headers });
           if (statusRes.ok) {
             const status = await statusRes.json();
             setSyncStatus(status);
             if (status.status !== "running") {
               clearInterval(interval);
-              fetchData(); // Recarregar apólices
+              fetchData();
               showToast("Sincronização concluída!");
             }
           }
@@ -505,7 +514,20 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     );
   }
 
-  // 2. DASHBOARD / TELA PRINCIPAL (LOGADO)
+  // 2a. SUPERADMIN — Dashboard de controle da plataforma
+  if (profile?.role === "superadmin") {
+    return (
+      <SuperadminDashboard
+        session={session}
+        profile={profile}
+        onLogout={handleLogout}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+      />
+    );
+  }
+
+  // 2b. DASHBOARD / TELA PRINCIPAL (admin/broker logado)
   return (
     <div className="app-container">
       {/* HEADER */}

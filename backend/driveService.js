@@ -3,6 +3,7 @@ import { Readable } from "stream";
 
 /**
  * Inicializa e autentica o cliente da API do Google Drive usando uma conta de serviço.
+ * Escopo ampliado para drive.file (permite criar pastas além de leitura).
  * @param {string} serviceAccountJsonString JSON completo da conta de serviço como string.
  * @returns {Object} Instância configurada do cliente Google Drive.
  */
@@ -13,20 +14,54 @@ export function getDriveClient(serviceAccountJsonString) {
 
   try {
     const credentials = JSON.parse(serviceAccountJsonString);
-    
+
     // Substituir quebras de linha na chave privada caso existam (comum em envs)
     const privateKey = credentials.private_key.replace(/\\n/g, "\n");
 
     const auth = new google.auth.JWT({
       email: credentials.client_email,
       key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+      scopes: [
+        "https://www.googleapis.com/auth/drive", // Escopo completo para criar pastas
+      ]
     });
 
     return google.drive({ version: "v3", auth });
   } catch (error) {
     console.error("Erro ao inicializar Google Auth:", error);
     throw new Error(`Falha na autenticação do Google Drive: ${error.message}`);
+  }
+}
+
+/**
+ * Cria uma pasta para uma organização no Google Drive, dentro de uma pasta pai.
+ * A pasta pai (GOOGLE_DRIVE_FOLDER_ID) deve ser compartilhada com a Service Account.
+ * @param {Object} drive Cliente autenticado do Google Drive.
+ * @param {string} orgName Nome da organização (usado como nome da pasta).
+ * @param {string} parentFolderId ID da pasta pai onde a pasta da org será criada.
+ * @returns {Promise<string>} ID da pasta criada.
+ */
+export async function createOrganizationFolder(drive, orgName, parentFolderId) {
+  if (!parentFolderId) {
+    throw new Error("GOOGLE_DRIVE_FOLDER_ID (pasta pai) não configurado.");
+  }
+
+  try {
+    const response = await drive.files.create({
+      requestBody: {
+        name: `[QuickAccess] ${orgName}`,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId],
+      },
+      fields: "id, name",
+    });
+
+    const folderId = response.data.id;
+    console.log(`[Drive] Pasta criada para org "${orgName}": ${folderId}`);
+    return folderId;
+  } catch (error) {
+    console.error(`Erro ao criar pasta no Drive para org "${orgName}":`, error);
+    throw new Error(`Falha ao criar pasta no Drive: ${error.message}`);
   }
 }
 
@@ -38,7 +73,7 @@ export function getDriveClient(serviceAccountJsonString) {
  */
 export async function listPdfFiles(drive, folderId) {
   if (!folderId) {
-    throw new Error("GOOGLE_DRIVE_FOLDER_ID não configurado.");
+    throw new Error("folderId não fornecido para listPdfFiles.");
   }
 
   try {
@@ -46,7 +81,7 @@ export async function listPdfFiles(drive, folderId) {
       q: `'${folderId}' in parents and mimeType = 'application/pdf' and trashed = false`,
       fields: "files(id, name, createdTime)",
       spaces: "drive",
-      pageSize: 100 // MVP processa até 100 por lote
+      pageSize: 100
     });
 
     return response.data.files || [];
