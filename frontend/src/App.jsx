@@ -644,7 +644,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
           )}
 
           {currentTab === "users" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div className="admin-users-layout" style={{ gap: "16px" }}>
               {/* Form Convidar */}
               <div className="admin-card">
                 <h3 className="section-title" style={{ margin: 0 }}>Adicionar Corretor</h3>
@@ -721,205 +721,207 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         </div>
       ) : (
         /* VIEW BUSCA / CORRETOR */
-        <div className="main-content">
-          {/* SEARCH BAR */}
-          <div className="search-wrapper">
-            <input 
-              type="text"
-              placeholder="Buscar placa, nome ou CPF..."
-              className="search-input"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <Search className="search-icon" size={20} />
-            {searchQuery && (
-              <button className="clear-search-btn" onClick={() => setSearchQuery("")}>
-                &times;
-              </button>
-            )}
-          </div>
-
-          {/* LISTA RESULTADOS */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            <h3 className="section-title">
-              {searchQuery ? "Resultados da Busca" : "Pesquisas Recentes"}
-            </h3>
-
-            {isLoading ? (
-              <div className="empty-state">
-                <RefreshCw className="animate-spin" size={32} />
-                <span>Carregando apólices...</span>
-              </div>
-            ) : searchResults.length > 0 ? (
-              <div className="results-list">
-                {searchResults.map((veh) => (
-                  <div 
-                    key={veh.id} 
-                    className="result-card"
-                    onClick={() => setSelectedVehicle(veh)}
-                  >
-                    <div className="result-card-header">
-                      <div>
-                        <div className="client-name">{veh.policy?.client?.name}</div>
-                        <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "2px" }}>
-                          {veh.brand_model}
-                        </div>
-                      </div>
-                      <span className="plate-badge">{veh.plate}</span>
-                    </div>
-                    <div className="result-card-body">
-                      <span className="insurer-badge">{veh.policy?.insurer?.name}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                        Vigência: {formatDate(veh.policy?.end_date)}
-                        <span className={`status-badge ${isPolicyActive(veh.policy?.end_date) ? "status-active" : "status-expired"}`}>
-                          {isPolicyActive(veh.policy?.end_date) ? "Ativa" : "Vencida"}
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <Info size={32} className="empty-state-icon" />
-                <span>Nenhum cliente ou veículo encontrado.</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* SLIDE-UP DETAIL PANEL */}
-      {selectedVehicle && (
-        <div className="slide-panel-backdrop" onClick={() => setSelectedVehicle(null)}>
-          <div className="slide-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header">
-              <span className="panel-title">Ficha do Segurado</span>
-              <button className="icon-btn" onClick={() => setSelectedVehicle(null)}>&times;</button>
-            </div>
-            
-            <div className="panel-content">
-              {/* Cartão Veículo */}
-              <div className="detail-card">
-                <div className="detail-section-title">Veículo Segurado</div>
-                <div className="detail-row">
-                  <span className="detail-label">Modelo</span>
-                  <span className="detail-value"><Car size={16} /> {selectedVehicle.brand_model}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Placa</span>
-                  <span className="detail-value" style={{ letterSpacing: "0.5px", fontWeight: "800" }}>
-                    {selectedVehicle.plate}
-                  </span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Ano</span>
-                  <span className="detail-value">{selectedVehicle.year || "N/A"}</span>
-                </div>
-              </div>
-
-              {/* Cartão Segurado */}
-              <div className="detail-card">
-                <div className="detail-section-title">Dados do Cliente</div>
-                <div className="detail-row">
-                  <span className="detail-label">Segurado</span>
-                  <span 
-                    className="detail-value copyable" 
-                    onClick={() => copyToClipboard(selectedVehicle.policy?.client?.name, "Nome do segurado")}
-                    title="Clique para copiar"
-                  >
-                    {selectedVehicle.policy?.client?.name} <Copy size={14} />
-                  </span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">CPF/CNPJ</span>
-                  <span 
-                    className="detail-value copyable"
-                    onClick={() => copyToClipboard(selectedVehicle.policy?.client?.cpf_cnpj, "CPF/CNPJ")}
-                    title="Clique para copiar"
-                  >
-                    {selectedVehicle.policy?.client?.cpf_cnpj} <Copy size={14} />
-                  </span>
-                </div>
-              </div>
-
-              {/* Cartão Apólice */}
-              <div className="detail-card">
-                <div className="detail-section-title">Dados do Contrato</div>
-                <div className="detail-row">
-                  <span className="detail-label">Seguradora</span>
-                  <span className="detail-value">{selectedVehicle.policy?.insurer?.name}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Nº Apólice</span>
-                  <span 
-                    className="detail-value copyable"
-                    onClick={() => copyToClipboard(selectedVehicle.policy?.policy_number, "Número da apólice")}
-                  >
-                    {selectedVehicle.policy?.policy_number} <Copy size={14} />
-                  </span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Vigência</span>
-                  <span className="detail-value"><Clock size={16} /> {formatDate(selectedVehicle.policy?.start_date)} a {formatDate(selectedVehicle.policy?.end_date)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Situação</span>
-                  <span className={`status-badge ${isPolicyActive(selectedVehicle.policy?.end_date) ? "status-active" : "status-expired"}`}>
-                    {isPolicyActive(selectedVehicle.policy?.end_date) ? "Apólice Ativa" : "Apólice Expirada"}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* AÇÕES DE UM TOQUE NO RODAPÉ */}
-            <div className="actions-footer">
-              <a 
-                href={`tel:${selectedVehicle.policy?.insurer?.assistance_phone?.replace(/\D/g, "")}`}
-                className="primary-btn"
-                style={{ textDecoration: "none" }}
-              >
-                <Phone size={18} />
-                Ligar para Assistência 24h
-              </a>
-              
-              {selectedVehicle.policy?.insurer?.assistance_whatsapp && (
-                <a 
-                  href={`https://wa.me/${selectedVehicle.policy.insurer.assistance_whatsapp}?text=${encodeURIComponent(
-                    `Olá, preciso de suporte para o segurado ${selectedVehicle.policy.client?.name}, placa ${selectedVehicle.plate}, apólice nº ${selectedVehicle.policy.policy_number}.`
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="primary-btn whatsapp-btn"
-                  style={{ textDecoration: "none" }}
-                >
-                  <MessageSquare size={18} />
-                  WhatsApp da Seguradora
-                </a>
-              )}
-
-              <button 
-                onClick={() => copyFormattedSummary(selectedVehicle)}
-                className="secondary-btn"
-              >
-                <Copy size={18} />
-                Copiar Resumo para WhatsApp
-              </button>
-
-              {selectedVehicle.policy?.drive_file_id && (
-                <button
-                  id="btn-view-pdf"
-                  onClick={() => handleViewPdf(selectedVehicle.policy.id)}
-                  className="secondary-btn"
-                  disabled={pdfLoading}
-                  style={{ opacity: pdfLoading ? 0.7 : 1 }}
-                >
-                  <FileText size={18} />
-                  {pdfLoading ? "Carregando PDF..." : "Visualizar Apólice (PDF)"}
+        <div className={`main-content search-view-layout ${selectedVehicle ? "has-selected" : ""}`}>
+          <div className="search-results-pane" style={{ display: "flex", flexDirection: "column", gap: "20px", width: "100%" }}>
+            {/* SEARCH BAR */}
+            <div className="search-wrapper">
+              <input 
+                type="text"
+                placeholder="Buscar placa, nome ou CPF..."
+                className="search-input"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              <Search className="search-icon" size={20} />
+              {searchQuery && (
+                <button className="clear-search-btn" onClick={() => setSearchQuery("")}>
+                  &times;
                 </button>
               )}
             </div>
+
+            {/* LISTA RESULTADOS */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <h3 className="section-title">
+                {searchQuery ? "Resultados da Busca" : "Pesquisas Recentes"}
+              </h3>
+
+              {isLoading ? (
+                <div className="empty-state">
+                  <RefreshCw className="animate-spin" size={32} />
+                  <span>Carregando apólices...</span>
+                </div>
+              ) : searchResults.length > 0 ? (
+                <div className="results-list">
+                  {searchResults.map((veh) => (
+                    <div 
+                      key={veh.id} 
+                      className="result-card"
+                      onClick={() => setSelectedVehicle(veh)}
+                    >
+                      <div className="result-card-header">
+                        <div>
+                          <div className="client-name">{veh.policy?.client?.name}</div>
+                          <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                            {veh.brand_model}
+                          </div>
+                        </div>
+                        <span className="plate-badge">{veh.plate}</span>
+                      </div>
+                      <div className="result-card-body">
+                        <span className="insurer-badge">{veh.policy?.insurer?.name}</span>
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          Vigência: {formatDate(veh.policy?.end_date)}
+                          <span className={`status-badge ${isPolicyActive(veh.policy?.end_date) ? "status-active" : "status-expired"}`}>
+                            {isPolicyActive(veh.policy?.end_date) ? "Ativa" : "Vencida"}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <Info size={32} className="empty-state-icon" />
+                  <span>Nenhum cliente ou veículo encontrado.</span>
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* SLIDE-UP DETAIL PANEL */}
+          {selectedVehicle && (
+            <div className="slide-panel-backdrop" onClick={() => setSelectedVehicle(null)}>
+              <div className="slide-panel" onClick={(e) => e.stopPropagation()}>
+                <div className="panel-header">
+                  <span className="panel-title">Ficha do Segurado</span>
+                  <button className="icon-btn" onClick={() => setSelectedVehicle(null)}>&times;</button>
+                </div>
+                
+                <div className="panel-content">
+                  {/* Cartão Veículo */}
+                  <div className="detail-card">
+                    <div className="detail-section-title">Veículo Segurado</div>
+                    <div className="detail-row">
+                      <span className="detail-label">Modelo</span>
+                      <span className="detail-value"><Car size={16} /> {selectedVehicle.brand_model}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">Placa</span>
+                      <span className="detail-value" style={{ letterSpacing: "0.5px", fontWeight: "800" }}>
+                        {selectedVehicle.plate}
+                      </span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">Ano</span>
+                      <span className="detail-value">{selectedVehicle.year || "N/A"}</span>
+                    </div>
+                  </div>
+
+                  {/* Cartão Segurado */}
+                  <div className="detail-card">
+                    <div className="detail-section-title">Dados do Cliente</div>
+                    <div className="detail-row">
+                      <span className="detail-label">Segurado</span>
+                      <span 
+                        className="detail-value copyable" 
+                        onClick={() => copyToClipboard(selectedVehicle.policy?.client?.name, "Nome do segurado")}
+                        title="Clique para copiar"
+                      >
+                        {selectedVehicle.policy?.client?.name} <Copy size={14} />
+                      </span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">CPF/CNPJ</span>
+                      <span 
+                        className="detail-value copyable"
+                        onClick={() => copyToClipboard(selectedVehicle.policy?.client?.cpf_cnpj, "CPF/CNPJ")}
+                        title="Clique para copiar"
+                      >
+                        {selectedVehicle.policy?.client?.cpf_cnpj} <Copy size={14} />
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Cartão Apólice */}
+                  <div className="detail-card">
+                    <div className="detail-section-title">Dados do Contrato</div>
+                    <div className="detail-row">
+                      <span className="detail-label">Seguradora</span>
+                      <span className="detail-value">{selectedVehicle.policy?.insurer?.name}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">Nº Apólice</span>
+                      <span 
+                        className="detail-value copyable"
+                        onClick={() => copyToClipboard(selectedVehicle.policy?.policy_number, "Número da apólice")}
+                      >
+                        {selectedVehicle.policy?.policy_number} <Copy size={14} />
+                      </span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">Vigência</span>
+                      <span className="detail-value"><Clock size={16} /> {formatDate(selectedVehicle.policy?.start_date)} a {formatDate(selectedVehicle.policy?.end_date)}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">Situação</span>
+                      <span className={`status-badge ${isPolicyActive(selectedVehicle.policy?.end_date) ? "status-active" : "status-expired"}`}>
+                        {isPolicyActive(selectedVehicle.policy?.end_date) ? "Apólice Ativa" : "Apólice Expirada"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AÇÕES DE UM TOQUE NO RODAPÉ */}
+                <div className="actions-footer">
+                  <a 
+                    href={`tel:${selectedVehicle.policy?.insurer?.assistance_phone?.replace(/\D/g, "")}`}
+                    className="primary-btn"
+                    style={{ textDecoration: "none" }}
+                  >
+                    <Phone size={18} />
+                    Ligar para Assistência 24h
+                  </a>
+                  
+                  {selectedVehicle.policy?.insurer?.assistance_whatsapp && (
+                    <a 
+                      href={`https://wa.me/${selectedVehicle.policy.insurer.assistance_whatsapp}?text=${encodeURIComponent(
+                        `Olá, preciso de suporte para o segurado ${selectedVehicle.policy.client?.name}, placa ${selectedVehicle.plate}, apólice nº ${selectedVehicle.policy.policy_number}.`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="primary-btn whatsapp-btn"
+                      style={{ textDecoration: "none" }}
+                    >
+                      <MessageSquare size={18} />
+                      WhatsApp da Seguradora
+                    </a>
+                  )}
+
+                  <button 
+                    onClick={() => copyFormattedSummary(selectedVehicle)}
+                    className="secondary-btn"
+                  >
+                    <Copy size={18} />
+                    Copiar Resumo para WhatsApp
+                  </button>
+
+                  {selectedVehicle.policy?.drive_file_id && (
+                    <button
+                      id="btn-view-pdf"
+                      onClick={() => handleViewPdf(selectedVehicle.policy.id)}
+                      className="secondary-btn"
+                      disabled={pdfLoading}
+                      style={{ opacity: pdfLoading ? 0.7 : 1 }}
+                    >
+                      <FileText size={18} />
+                      {pdfLoading ? "Carregando PDF..." : "Visualizar Apólice (PDF)"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

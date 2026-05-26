@@ -82,7 +82,7 @@ body {
   flex-direction: column;
   min-height: 100vh;
   padding: 0;
-  max-width: 480px; /* Mobile width constraint on desktop */
+  max-width: 1200px; /* Expanded to 1200px for desktop-friendly view */
   margin: 0 auto;
   background-color: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
@@ -782,4 +782,77 @@ header {
 
 .delete-btn:hover {
   background-color: var(--danger-glow);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   RESPONSIVIDADE E LAYOUT DESKTOP (>= 768px)
+   ───────────────────────────────────────────────────────────── */
+@media (min-width: 768px) {
+  /* SearchView: layout de duas colunas */
+  .search-view-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    align-items: start;
+    transition: grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .search-view-layout.has-selected {
+    grid-template-columns: 1fr 1.2fr;
+  }
+
+  /* Painel de Detalhes: de modal slide-up para coluna lateral sticky */
+  .slide-panel-backdrop {
+    position: static;
+    background-color: transparent;
+    backdrop-filter: none;
+    display: block;
+    width: 100%;
+    height: auto;
+    z-index: auto;
+    animation: none;
+  }
+
+  .slide-panel {
+    position: sticky;
+    top: 96px; /* Fica fixado abaixo do header */
+    width: 100%;
+    height: calc(100vh - 120px);
+    max-height: 800px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-md);
+    animation: none;
+    margin-top: 0;
+  }
+
+  .slide-panel .panel-header {
+    border-bottom: 1px solid var(--border-color);
+    padding: 16px 20px;
+  }
+
+  .slide-panel .panel-content {
+    padding: 20px;
+    gap: 16px;
+  }
+
+  .slide-panel .actions-footer {
+    padding: 16px 20px 20px 20px;
+    border-top: 1px solid var(--border-color);
+    background-color: transparent;
+  }
+
+  /* Admin corretores: Lado a Lado */
+  .admin-users-layout {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  /* Body background adjustment */
+  body {
+    background-color: var(--bg-primary);
+  }
 }
