@@ -231,29 +231,65 @@ export async function seedSuperAdmin(supabase) {
     }
 
     if (!existingProfile) {
-      console.log(`SuperAdmin ${superAdminEmail} não encontrado. Criando...`);
+      console.log(`SuperAdmin ${superAdminEmail} não encontrado no profiles. Verificando no Auth...`);
 
-      const { error: createError } = await supabase.auth.admin.createUser({
-        email: superAdminEmail,
-        password: "Badia@123",
-        email_confirm: true,
-        user_metadata: {
-          name: "Flávio",
-          role: "superadmin"
-        }
-      });
+      // Listar usuários para encontrar se já existe no Auth
+      const { data: listData, error: listError } = await supabase.auth.admin.listUsers();
+      if (listError) {
+        console.error("Erro ao listar usuários do Auth:", listError.message);
+        return;
+      }
 
-      if (createError) {
-        console.error("Erro ao criar superadmin:", createError.message);
-      } else {
-        // O trigger do Supabase deve criar o profile automaticamente.
-        // Garantir role superadmin e sem org:
-        await supabase
+      const authUser = listData.users.find(u => u.email === superAdminEmail);
+
+      if (authUser) {
+        console.log(`SuperAdmin já existe no Auth (ID: ${authUser.id}). Criando perfil correspondente...`);
+        
+        // Fazer upsert para garantir a inserção
+        const { error: insertError } = await supabase
           .from("profiles")
-          .update({ role: "superadmin", organization_id: null })
-          .eq("email", superAdminEmail);
+          .upsert({
+            id: authUser.id,
+            email: superAdminEmail,
+            name: authUser.user_metadata?.name || "Flávio",
+            role: "superadmin",
+            organization_id: null,
+            is_active: true
+          });
 
-        console.log(`SuperAdmin ${superAdminEmail} criado com sucesso.`);
+        if (insertError) {
+          console.error("Erro ao criar perfil do superadmin existente:", insertError.message);
+        } else {
+          console.log(`Perfil do SuperAdmin criado e sincronizado.`);
+        }
+      } else {
+        console.log("SuperAdmin não existe no Auth. Criando usuário e perfil...");
+        const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+          email: superAdminEmail,
+          password: "Badia@123",
+          email_confirm: true,
+          user_metadata: {
+            name: "Flávio",
+            role: "superadmin"
+          }
+        });
+
+        if (createError) {
+          console.error("Erro ao criar superadmin:", createError.message);
+        } else {
+          // Garantir perfil atualizado no profiles (upsert/update)
+          await supabase
+            .from("profiles")
+            .upsert({
+              id: newUser.user.id,
+              email: superAdminEmail,
+              name: "Flávio",
+              role: "superadmin",
+              organization_id: null,
+              is_active: true
+            });
+          console.log(`SuperAdmin ${superAdminEmail} criado com sucesso.`);
+        }
       }
     } else {
       // Garantir que o perfil está correto

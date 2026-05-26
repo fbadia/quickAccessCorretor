@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   Building2, Users, FileText, RefreshCw, ToggleLeft, ToggleRight,
   Plus, ShieldCheck, AlertTriangle, CheckCircle2, Clock, Wifi, WifiOff,
-  LogOut, Sun, Moon, X
+  LogOut, Sun, Moon, X, Edit, Trash2
 } from "lucide-react";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
@@ -39,10 +39,29 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // Modal de nova organização
+  // Modal de nova organização (inclui dados do admin)
   const [showNewOrgModal, setShowNewOrgModal] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgAdminName, setNewOrgAdminName] = useState("");
+  const [newOrgAdminEmail, setNewOrgAdminEmail] = useState("");
+  const [newOrgAdminPassword, setNewOrgAdminPassword] = useState("");
   const [creatingOrg, setCreatingOrg] = useState(false);
+
+  // Modal de edição de organização
+  const [showEditOrgModal, setShowEditOrgModal] = useState(false);
+  const [editingOrg, setEditingOrg] = useState(null);
+  const [editOrgName, setEditOrgName] = useState("");
+  const [editOrgDriveId, setEditOrgDriveId] = useState("");
+  const [savingOrg, setSavingOrg] = useState(false);
+
+  // Modal de edição de usuário
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editUserName, setEditUserName] = useState("");
+  const [editUserEmail, setEditUserEmail] = useState("");
+  const [editUserRole, setEditUserRole] = useState("broker");
+  const [editUserPassword, setEditUserPassword] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
 
   // Modal de novo superadmin
   const [showNewSAModal, setShowNewSAModal] = useState(false);
@@ -117,24 +136,134 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
     }
   };
 
-  // Criar nova organização
+  // Criar nova organização (com Admin integrado)
   const handleCreateOrg = async (e) => {
     e.preventDefault();
-    if (!newOrgName.trim()) return;
+    if (!newOrgName.trim() || !newOrgAdminName.trim() || !newOrgAdminEmail.trim() || !newOrgAdminPassword) {
+      showToast("Preencha todos os campos da organização e do administrador.", "error");
+      return;
+    }
     setCreatingOrg(true);
     try {
       await authFetch("/superadmin/organizations", {
         method: "POST",
-        body: JSON.stringify({ name: newOrgName.trim() }),
+        body: JSON.stringify({
+          name: newOrgName.trim(),
+          adminName: newOrgAdminName.trim(),
+          adminEmail: newOrgAdminEmail.trim(),
+          adminPassword: newOrgAdminPassword
+        }),
       });
-      showToast(`Organização "${newOrgName}" criada com sucesso!`);
+      showToast(`Organização "${newOrgName}" e administrador criados com sucesso!`);
       setNewOrgName("");
+      setNewOrgAdminName("");
+      setNewOrgAdminEmail("");
+      setNewOrgAdminPassword("");
       setShowNewOrgModal(false);
       loadMetrics();
     } catch (err) {
       showToast(err.message, "error");
     } finally {
       setCreatingOrg(false);
+    }
+  };
+
+  // Editar Organização (Carregar dados)
+  const openEditOrgModal = (org) => {
+    setEditingOrg(org);
+    setEditOrgName(org.name || "");
+    setEditOrgDriveId(org.drive_folder_id || "");
+    setShowEditOrgModal(true);
+  };
+
+  // Salvar Organização
+  const handleSaveOrg = async (e) => {
+    e.preventDefault();
+    if (!editOrgName.trim()) return;
+    setSavingOrg(true);
+    try {
+      await authFetch(`/superadmin/organizations/${editingOrg.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: editOrgName.trim(),
+          drive_folder_id: editOrgDriveId.trim() || null
+        })
+      });
+      showToast("Organização atualizada com sucesso!");
+      setShowEditOrgModal(false);
+      loadMetrics();
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setSavingOrg(false);
+    }
+  };
+
+  // Excluir Organização
+  const handleDeleteOrg = async (orgId, orgName) => {
+    if (!window.confirm(`ATENÇÃO: Tem certeza que deseja EXCLUIR a organização "${orgName}"?\nIsso apagará permanentemente todos os usuários, apólices, clientes e veículos vinculados a ela de forma IRREVERSÍVEL.`)) {
+      return;
+    }
+    try {
+      await authFetch(`/superadmin/organizations/${orgId}`, { method: "DELETE" });
+      showToast("Organização e todos os seus dados e usuários foram excluídos!");
+      loadMetrics();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  // Editar Usuário (Carregar dados)
+  const openEditUserModal = (user) => {
+    setEditingUser(user);
+    setEditUserName(user.name || "");
+    setEditUserEmail(user.email || "");
+    setEditUserRole(user.role || "broker");
+    setEditUserPassword(""); // Senha vazia por padrão
+    setShowEditUserModal(true);
+  };
+
+  // Salvar Usuário
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    if (!editUserName.trim() || !editUserEmail.trim()) return;
+    setSavingUser(true);
+    try {
+      const body = {
+        name: editUserName.trim(),
+        email: editUserEmail.trim(),
+        role: editUserRole
+      };
+      if (editUserPassword) {
+        body.password = editUserPassword;
+      }
+      await authFetch(`/superadmin/users/${editingUser.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      showToast("Corretor atualizado com sucesso!");
+      setShowEditUserModal(false);
+      loadUsers();
+      loadMetrics(); // Atualizar contagem
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  // Excluir Usuário
+  const handleDeleteUser = async (userId, userEmail) => {
+    if (!window.confirm(`Tem certeza que deseja EXCLUIR permanentemente o usuário "${userEmail}"?`)) {
+      return;
+    }
+    try {
+      await authFetch(`/superadmin/users/${userId}`, { method: "DELETE" });
+      showToast("Usuário excluído com sucesso!");
+      loadUsers();
+      loadMetrics(); // Atualizar contagem
+    } catch (err) {
+      showToast(err.message, "error");
     }
   };
 
@@ -278,7 +407,7 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                      {["Organização", "Status", "Usuários", "Apólices", "Última Sync", "Drive", "Ação"].map(h => (
+                      {["Organização", "Status", "Usuários", "Apólices", "Última Sync", "Drive", "Ações"].map(h => (
                         <th key={h} style={{ padding: "0.75rem", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>{h}</th>
                       ))}
                     </tr>
@@ -312,15 +441,33 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                             : <WifiOff size={15} color="#ef4444" title="Pasta não configurada" />}
                         </td>
                         <td style={{ padding: "0.875rem 0.75rem" }}>
-                          <button
-                            onClick={() => toggleOrgStatus(org.id, org.status)}
-                            title={org.status === "active" ? "Desabilitar" : "Habilitar"}
-                            style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                          >
-                            {org.status === "active"
-                              ? <ToggleRight size={26} color="#22c55e" />
-                              : <ToggleLeft size={26} color="#6b7280" />}
-                          </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                            <button
+                              onClick={() => toggleOrgStatus(org.id, org.status)}
+                              title={org.status === "active" ? "Desabilitar" : "Habilitar"}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                            >
+                              {org.status === "active"
+                                ? <ToggleRight size={24} color="#22c55e" />
+                                : <ToggleLeft size={24} color="#6b7280" />}
+                            </button>
+                            <button
+                              onClick={() => openEditOrgModal(org)}
+                              title="Editar"
+                              className="icon-btn"
+                              style={{ padding: "4px" }}
+                            >
+                              <Edit size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteOrg(org.id, org.name)}
+                              title="Excluir"
+                              className="icon-btn"
+                              style={{ padding: "4px", color: "var(--danger-color)" }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -351,7 +498,7 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                    {["Nome", "E-mail", "Role", "Organização", "Status", "Ação"].map(h => (
+                    {["Nome", "E-mail", "Role", "Organização", "Status", "Ações"].map(h => (
                       <th key={h} style={{ padding: "0.75rem", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>{h}</th>
                     ))}
                   </tr>
@@ -375,15 +522,33 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                           </span>
                         </td>
                         <td style={{ padding: "0.875rem 0.75rem" }}>
-                          <button
-                            onClick={() => toggleUserStatus(u.id, u.is_active)}
-                            style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                            title={u.is_active ? "Desabilitar usuário" : "Habilitar usuário"}
-                          >
-                            {u.is_active
-                              ? <ToggleRight size={26} color="#22c55e" />
-                              : <ToggleLeft size={26} color="#6b7280" />}
-                          </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                            <button
+                              onClick={() => toggleUserStatus(u.id, u.is_active)}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                              title={u.is_active ? "Desabilitar usuário" : "Habilitar usuário"}
+                            >
+                              {u.is_active
+                                ? <ToggleRight size={24} color="#22c55e" />
+                                : <ToggleLeft size={24} color="#6b7280" />}
+                            </button>
+                            <button
+                              onClick={() => openEditUserModal(u)}
+                              title="Editar"
+                              className="icon-btn"
+                              style={{ padding: "4px" }}
+                            >
+                              <Edit size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(u.id, u.email)}
+                              title="Excluir"
+                              className="icon-btn"
+                              style={{ padding: "4px", color: "var(--danger-color)" }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -410,10 +575,13 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
         )}
       </div>
 
-      {/* MODAL: Nova Organização */}
+      {/* MODAL: Nova Organização (com Admin integrado) */}
       {showNewOrgModal && (
-        <Modal title="Nova Organização" onClose={() => setShowNewOrgModal(false)}>
+        <Modal title="Nova Organização + Administrador" onClose={() => setShowNewOrgModal(false)}>
           <form onSubmit={handleCreateOrg} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "0.5rem" }}>
+              <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#863bff" }}>Dados da Corretora</h4>
+            </div>
             <div className="form-group">
               <label className="form-label">Nome da Organização</label>
               <input
@@ -426,13 +594,144 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                 autoFocus
               />
             </div>
-            <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", margin: 0 }}>
-              Uma pasta será criada automaticamente no Google Drive para esta organização.
+            
+            <div style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "0.5rem", marginTop: "0.5rem" }}>
+              <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#863bff" }}>Administrador da Corretora</h4>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nome do Admin</label>
+              <input
+                className="form-input"
+                type="text"
+                value={newOrgAdminName}
+                onChange={e => setNewOrgAdminName(e.target.value)}
+                placeholder="Ex: Carlos Silva"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">E-mail do Admin</label>
+              <input
+                className="form-input"
+                type="email"
+                value={newOrgAdminEmail}
+                onChange={e => setNewOrgAdminEmail(e.target.value)}
+                placeholder="Ex: carlos@corretora.com"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Senha do Admin</label>
+              <input
+                className="form-input"
+                type="password"
+                value={newOrgAdminPassword}
+                onChange={e => setNewOrgAdminPassword(e.target.value)}
+                placeholder="Mínimo 6 caracteres"
+                required
+                minLength={6}
+              />
+            </div>
+
+            <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: 0 }}>
+              Uma pasta será criada no Google Drive e a conta do administrador será criada com a role "admin".
             </p>
-            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
               <button type="button" className="secondary-btn" onClick={() => setShowNewOrgModal(false)}>Cancelar</button>
               <button type="submit" className="primary-btn" disabled={creatingOrg}>
                 {creatingOrg ? "Criando..." : "Criar Organização"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* MODAL: Editar Organização */}
+      {showEditOrgModal && editingOrg && (
+        <Modal title="Editar Organização" onClose={() => setShowEditOrgModal(false)}>
+          <form onSubmit={handleSaveOrg} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div className="form-group">
+              <label className="form-label">Nome da Organização</label>
+              <input
+                className="form-input"
+                type="text"
+                value={editOrgName}
+                onChange={e => setEditOrgName(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">ID da Pasta do Google Drive</label>
+              <input
+                className="form-input"
+                type="text"
+                value={editOrgDriveId}
+                onChange={e => setEditOrgDriveId(e.target.value)}
+                placeholder="ID do Google Drive"
+              />
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+              <button type="button" className="secondary-btn" onClick={() => setShowEditOrgModal(false)}>Cancelar</button>
+              <button type="submit" className="primary-btn" disabled={savingOrg}>
+                {savingOrg ? "Salvando..." : "Salvar Alterações"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* MODAL: Editar Usuário */}
+      {showEditUserModal && editingUser && (
+        <Modal title="Editar Usuário Corretor" onClose={() => setShowEditUserModal(false)}>
+          <form onSubmit={handleSaveUser} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div className="form-group">
+              <label className="form-label">Nome Completo</label>
+              <input
+                className="form-input"
+                type="text"
+                value={editUserName}
+                onChange={e => setEditUserName(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">E-mail</label>
+              <input
+                className="form-input"
+                type="email"
+                value={editUserEmail}
+                onChange={e => setEditUserEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nova Senha (Opcional)</label>
+              <input
+                className="form-input"
+                type="password"
+                value={editUserPassword}
+                onChange={e => setEditUserPassword(e.target.value)}
+                placeholder="Deixe em branco para manter a atual"
+                minLength={6}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Acesso / Role</label>
+              <select
+                className="form-select"
+                value={editUserRole}
+                onChange={e => setEditUserRole(e.target.value)}
+              >
+                <option value="broker">Corretor (Apenas Consulta)</option>
+                <option value="admin">Administrador (Consulta e Sincronização)</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+              <button type="button" className="secondary-btn" onClick={() => setShowEditUserModal(false)}>Cancelar</button>
+              <button type="submit" className="primary-btn" disabled={savingUser}>
+                {savingUser ? "Salvando..." : "Salvar Alterações"}
               </button>
             </div>
           </form>

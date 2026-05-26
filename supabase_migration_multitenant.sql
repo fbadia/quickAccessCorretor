@@ -22,9 +22,18 @@ CREATE TABLE IF NOT EXISTS organizations (
 );
 
 -- ─────────────────────────────────────────────────────────────
--- ETAPA 2: Modificar profiles (organization_id + is_active)
+-- ETAPA 2: Atualizar constraint de role + Modificar profiles
 -- ─────────────────────────────────────────────────────────────
 
+-- Remover constraint existente de role (não inclui 'superadmin')
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
+
+-- Recriar constraint incluindo 'superadmin'
+ALTER TABLE profiles
+  ADD CONSTRAINT profiles_role_check
+  CHECK (role IN ('admin', 'broker', 'superadmin'));
+
+-- Adicionar novas colunas
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id),
   ADD COLUMN IF NOT EXISTS is_active       BOOLEAN NOT NULL DEFAULT true;

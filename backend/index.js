@@ -295,24 +295,29 @@ app.get("/superadmin/metrics", authenticate, requireSuperAdmin, async (req, res)
   }
 });
 
-/** POST /superadmin/organizations — Cria nova organização + pasta no Drive */
+/** POST /superadmin/organizations — Cria nova organização + primeiro Administrador */
 app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (req, res) => {
-  const { name } = req.body;
-  if (!name?.trim()) return res.status(400).json({ error: "Nome da organização é obrigatório." });
+  const { name, adminEmail, adminPassword, adminName } = req.body;
+  if (!name?.trim() || !adminEmail?.trim() || !adminPassword || !adminName?.trim()) {
+    return res.status(400).json({ error: "Campos obrigatórios: Nome da Org, Nome do Admin, E-mail do Admin e Senha do Admin." });
+  }
+
+  let createdOrgId = null;
+  let createdUserId = null;
 
   try {
-    // Criar a pasta no Drive
+    // 1. Criar a pasta no Drive
     let driveFolderId = null;
     if (drive && process.env.GOOGLE_DRIVE_FOLDER_ID) {
       try {
         driveFolderId = await createOrganizationFolder(drive, name.trim(), process.env.GOOGLE_DRIVE_FOLDER_ID);
       } catch (driveErr) {
         console.error("Erro ao criar pasta no Drive:", driveErr.message);
-        // Não bloquear criação da org se Drive falhar
       }
     }
 
-    const { data: org, error } = await supabase
+    // 2. Inserir a Organização
+    const { data: org, error: orgError } = await supabase
       .from("organizations")
       .insert({
         name: name.trim(),
@@ -322,13 +327,114 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
       .select()
       .single();
 
-    if (error) throw error;
+    if (orgError) throw orgError;
+    createdOrgId = org.id;
 
-    console.log(`[SuperAdmin] Organização "${name}" criada (ID: ${org.id})`);
-    res.status(201).json({ message: "Organização criada com sucesso.", organization: org });
+    // 3. Criar o usuário Admin no Auth
+    const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+      email: adminEmail.trim(),
+      password: adminPassword,
+      email_confirm: true,
+      user_metadata: { name: adminName.trim(), role: "admin" }
+    });
+
+    if (createError) {
+      // Rollback da org
+      await supabase.from("organizations").delete().eq("id", createdOrgId);
+      return res.status(400).json({ error: `Erro ao criar administrador no Auth: ${createError.message}` });
+    }
+    createdUserId = newUser.user.id;
+
+    // 4. Vincular o profile à Organização como admin
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .upsert({
+        id: createdUserId,
+        email: adminEmail.trim(),
+        name: adminName.trim(),
+        role: "admin",
+        organization_id: createdOrgId,
+        is_active: true
+      });
+
+    if (profileError) {
+      // Rollback do usuário e da org
+      await supabase.auth.admin.deleteUser(createdUserId);
+      await supabase.from("organizations").delete().eq("id", createdOrgId);
+      return res.status(400).json({ error: `Erro ao associar perfil do administrador: ${profileError.message}` });
+    }
+
+    console.log(`[SuperAdmin] Organização "${name}" criada. Admin: ${adminEmail}`);
+    res.status(201).json({ message: "Organização e Administrador criados com sucesso.", organization: org });
   } catch (err) {
-    console.error("Erro ao criar organização:", err.message);
-    res.status(500).json({ error: "Erro ao criar organização." });
+    console.error("Erro ao criar organização com admin:", err.message);
+    res.status(500).json({ error: "Erro interno ao criar organização." });
+  }
+});
+
+/** PATCH /superadmin/organizations/:orgId — Edita nome ou pasta do Drive */
+app.patch("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, async (req, res) => {
+  const { orgId } = req.params;
+  const { name, drive_folder_id } = req.body;
+
+  try {
+    const updateData = { updated_at: new Date().toISOString() };
+    if (name?.trim()) updateData.name = name.trim();
+    if (drive_folder_id !== undefined) updateData.drive_folder_id = drive_folder_id;
+
+    const { data, error } = await supabase
+      .from("organizations")
+      .update(updateData)
+      .eq("id", orgId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Organização atualizada com sucesso.", organization: data });
+  } catch (err) {
+    console.error("Erro ao editar organização:", err.message);
+    res.status(500).json({ error: "Erro ao editar organização." });
+  }
+});
+
+/** DELETE /superadmin/organizations/:orgId — Exclui organização e todos os seus dados */
+app.delete("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, async (req, res) => {
+  const { orgId } = req.params;
+
+  try {
+    // 1. Listar e deletar todos os usuários da org do Auth
+    const { data: profiles, error: profError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("organization_id", orgId);
+
+    if (profError) throw profError;
+
+    if (profiles && profiles.length > 0) {
+      for (const p of profiles) {
+        await supabase.auth.admin.deleteUser(p.id);
+      }
+    }
+
+    // 2. Deletar apólices, clientes, veículos e seguradoras associadas
+    await supabase.from("vehicles").delete().eq("organization_id", orgId);
+    await supabase.from("policies").delete().eq("organization_id", orgId);
+    await supabase.from("clients").delete().eq("organization_id", orgId);
+    await supabase.from("insurers").delete().eq("organization_id", orgId);
+
+    // 3. Deletar a organização
+    const { error: deleteOrgError } = await supabase
+      .from("organizations")
+      .delete()
+      .eq("id", orgId);
+
+    if (deleteOrgError) throw deleteOrgError;
+
+    console.log(`[SuperAdmin] Organização ${orgId} e todos os seus recursos foram excluídos.`);
+    res.json({ message: "Organização e todos os seus dados e usuários foram excluídos com sucesso." });
+  } catch (err) {
+    console.error("Erro ao deletar organização:", err.message);
+    res.status(500).json({ error: "Erro ao deletar organização e seus dados." });
   }
 });
 
@@ -354,6 +460,79 @@ app.patch("/superadmin/organizations/:orgId/status", authenticate, requireSuperA
     res.json({ message: `Organização ${status === "active" ? "habilitada" : "desabilitada"}.`, organization: data });
   } catch (err) {
     res.status(500).json({ error: "Erro ao atualizar status da organização." });
+  }
+});
+
+/** PATCH /superadmin/users/:userId — Edita informações de um usuário */
+app.patch("/superadmin/users/:userId", authenticate, requireSuperAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { name, email, role, password, is_active } = req.body;
+
+  try {
+    // 1. Atualizar dados no Auth do Supabase se necessário
+    const authUpdateData = {};
+    if (email?.trim()) authUpdateData.email = email.trim();
+    if (password) authUpdateData.password = password;
+    
+    // Atualizar metadados do Auth
+    const userMetadata = {};
+    if (name?.trim()) userMetadata.name = name.trim();
+    if (role) userMetadata.role = role;
+    if (Object.keys(userMetadata).length > 0) {
+      authUpdateData.user_metadata = userMetadata;
+    }
+
+    if (Object.keys(authUpdateData).length > 0) {
+      const { error: authError } = await supabase.auth.admin.updateUserById(userId, authUpdateData);
+      if (authError) return res.status(400).json({ error: `Erro ao atualizar usuário no Auth: ${authError.message}` });
+    }
+
+    // 2. Atualizar tabela profiles
+    const profileUpdateData = {};
+    if (name?.trim()) profileUpdateData.name = name.trim();
+    if (email?.trim()) profileUpdateData.email = email.trim();
+    if (role) {
+      if (!["admin", "broker", "superadmin"].includes(role)) {
+        return res.status(400).json({ error: "Role inválida." });
+      }
+      profileUpdateData.role = role;
+    }
+    if (is_active !== undefined) profileUpdateData.is_active = is_active;
+
+    const { data: updatedProfile, error: profError } = await supabase
+      .from("profiles")
+      .update(profileUpdateData)
+      .eq("id", userId)
+      .select()
+      .single();
+
+    if (profError) throw profError;
+
+    res.json({ message: "Usuário atualizado com sucesso.", profile: updatedProfile });
+  } catch (err) {
+    console.error("Erro ao editar usuário:", err.message);
+    res.status(500).json({ error: "Erro ao editar usuário." });
+  }
+});
+
+/** DELETE /superadmin/users/:userId — Exclui usuário completamente do Auth e profiles */
+app.delete("/superadmin/users/:userId", authenticate, requireSuperAdmin, async (req, res) => {
+  const { userId } = req.params;
+
+  // Impedir auto-exclusão
+  if (userId === req.profile.id) {
+    return res.status(400).json({ error: "Não é possível excluir seu próprio usuário." });
+  }
+
+  try {
+    const { error } = await supabase.auth.admin.deleteUser(userId);
+    if (error) throw error;
+
+    console.log(`[SuperAdmin] Usuário ${userId} excluído com sucesso.`);
+    res.json({ message: "Usuário excluído com sucesso." });
+  } catch (err) {
+    console.error("Erro ao deletar usuário:", err.message);
+    res.status(500).json({ error: "Erro ao deletar usuário." });
   }
 });
 
