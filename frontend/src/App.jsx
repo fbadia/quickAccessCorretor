@@ -772,7 +772,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
               className={`tab-btn ${currentTab === "sync" ? "active" : ""}`}
               onClick={() => setCurrentTab("sync")}
             >
-              Importar Apólices (PDF)
+              Importar apólices
             </button>
             <button 
               className={`tab-btn ${currentTab === "users" ? "active" : ""}`}
