@@ -175,7 +175,7 @@ export default function App() {
           policy:policies (
             id,
             policy_number,
-            drive_file_id,
+            storage_path,
             start_date,
             end_date,
             client:clients (
@@ -1265,7 +1265,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                     Copiar Resumo para WhatsApp
                   </button>
 
-                  {selectedVehicle.policy?.drive_file_id && (
+                  {selectedVehicle.policy?.storage_path && (
                     <button
                       id="btn-view-pdf"
                       onClick={() => handleViewPdf(selectedVehicle.policy.id)}
