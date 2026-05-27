@@ -784,10 +784,106 @@ header {
   background-color: var(--danger-glow);
 }
 
+/* Responsive utilities - Mobile defaults */
+.desktop-only {
+  display: none !important;
+}
+
+.desktop-only-card {
+  display: none !important;
+}
+
+.mobile-only-card {
+  display: flex !important;
+}
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background-color: var(--bg-glass);
+  border-top: 1px solid var(--border-color);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 999;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 0 16px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.bottom-nav-item {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  width: 70px;
+  height: 50px;
+  border-radius: var(--border-radius-sm);
+  transition: all var(--transition-fast);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.bottom-nav-item svg {
+  transition: transform var(--transition-fast);
+}
+
+.bottom-nav-item:active svg {
+  transform: scale(0.9);
+}
+
+.bottom-nav-item.active {
+  color: var(--accent-color);
+}
+
+.bottom-nav-item.active svg {
+  filter: drop-shadow(0 0 4px var(--accent-color));
+}
+
+@media (max-width: 767px) {
+  .app-container {
+    padding-bottom: 74px !important;
+  }
+  
+  header {
+    padding: 14px 16px; /* Slightly tighter header on mobile */
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────
    RESPONSIVIDADE E LAYOUT DESKTOP (>= 768px)
    ───────────────────────────────────────────────────────────── */
 @media (min-width: 768px) {
+  /* Reset mobile defaults for desktop */
+  .desktop-only {
+    display: flex !important;
+  }
+
+  .desktop-only-card {
+    display: flex !important;
+  }
+
+  .mobile-only-card {
+    display: none !important;
+  }
+
+  .bottom-nav {
+    display: none !important;
+  }
+
+  .app-container {
+    padding-bottom: 0 !important;
+  }
+
   /* SearchView: layout de duas colunas */
   .search-view-layout {
     display: grid;

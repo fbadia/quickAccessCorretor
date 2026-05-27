@@ -125,12 +125,32 @@ export default function App() {
     }
 
     const query = searchQuery.toLowerCase().trim();
+    const queryDigits = query.replace(/\D/g, "");
+    const queryAlphanumeric = query.replace(/[^a-z0-9]/g, "");
+    const cleanQueryName = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
     const filtered = vehicles.filter(v => {
-      const plateMatch = v.plate && v.plate.toLowerCase().includes(query);
-      const nameMatch = v.policy?.client?.name && v.policy.client.name.toLowerCase().includes(query);
-      const cpfMatch = v.policy?.client?.cpf_cnpj && v.policy.client.cpf_cnpj.replace(/\D/g, "").includes(query.replace(/\D/g, ""));
-      const brandMatch = v.brand_model && v.brand_model.toLowerCase().includes(query);
-      const insurerMatch = v.policy?.insurer?.name && v.policy.insurer.name.toLowerCase().includes(query);
+      // 1. Busca por Placa (remove caracteres especiais de ambos)
+      const cleanPlate = v.plate ? v.plate.toLowerCase().replace(/[^a-z0-9]/g, "") : "";
+      const plateMatch = queryAlphanumeric && cleanPlate && cleanPlate.includes(queryAlphanumeric);
+
+      // 2. Busca por Nome (corta acentos e compara)
+      const cleanName = v.policy?.client?.name 
+        ? v.policy.client.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") 
+        : "";
+      const nameMatch = cleanName && cleanName.includes(cleanQueryName);
+
+      // 3. Busca por CPF/CNPJ (compara apenas os dígitos, se a query contiver dígitos)
+      const cleanCpf = v.policy?.client?.cpf_cnpj ? v.policy.client.cpf_cnpj.replace(/\D/g, "") : "";
+      const cpfMatch = queryDigits && cleanCpf && cleanCpf.includes(queryDigits);
+
+      // 4. Busca por Marca/Modelo
+      const cleanBrand = v.brand_model ? v.brand_model.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+      const brandMatch = cleanBrand && cleanBrand.includes(cleanQueryName);
+
+      // 5. Busca por Seguradora
+      const cleanInsurer = v.policy?.insurer?.name ? v.policy.insurer.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+      const insurerMatch = cleanInsurer && cleanInsurer.includes(cleanQueryName);
 
       return plateMatch || nameMatch || cpfMatch || brandMatch || insurerMatch;
     });
@@ -731,29 +751,31 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         </div>
         <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           {profile?.role === "admin" && (
-            <button 
-              onClick={() => setIsAdminView(!isAdminView)}
-              className="primary-btn"
-              style={{
-                padding: "6px 14px",
-                fontSize: "0.82rem",
-                background: isAdminView 
-                  ? "rgba(255, 255, 255, 0.05)" 
-                  : "linear-gradient(135deg, var(--accent-color), var(--secondary-accent))",
-                border: isAdminView ? "1px solid var(--border-color)" : "none",
-                color: "var(--text-primary)",
-                borderRadius: "20px",
-                height: "34px",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                width: "auto"
-              }}
-            >
-              {isAdminView ? <Search size={14} /> : <Shield size={14} />}
-              {isAdminView ? "Ir para Busca" : "Painel Admin"}
-            </button>
+            <div className="desktop-only">
+              <button 
+                onClick={() => setIsAdminView(!isAdminView)}
+                className="primary-btn"
+                style={{
+                  padding: "6px 14px",
+                  fontSize: "0.82rem",
+                  background: isAdminView 
+                    ? "rgba(255, 255, 255, 0.05)" 
+                    : "linear-gradient(135deg, var(--accent-color), var(--secondary-accent))",
+                  border: isAdminView ? "1px solid var(--border-color)" : "none",
+                  color: "var(--text-primary)",
+                  borderRadius: "20px",
+                  height: "34px",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  width: "auto"
+                }}
+              >
+                {isAdminView ? <Search size={14} /> : <Shield size={14} />}
+                {isAdminView ? "Ir para Busca" : "Painel Admin"}
+              </button>
+            </div>
           )}
           <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
@@ -815,7 +837,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                 </div>
               </div>
 
-              <div className="admin-card">
+              <div className="admin-card desktop-only-card">
                 <h3 className="section-title" style={{ margin: 0 }}>Armazenamento Supabase Storage (S3)</h3>
                 <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>
                   Faça o upload direto dos arquivos PDF de suas apólices. Os dados serão extraídos automaticamente pela IA (Gemini) e os arquivos salvos de forma isolada por organização.
@@ -955,6 +977,23 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                     </button>
                   </div>
                 )}
+              </div>
+
+              {/* Banner informativo de Upload (Somente Mobile) */}
+              <div className="admin-card mobile-only-card" style={{
+                textAlign: "center",
+                padding: "30px 20px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "12px"
+              }}>
+                <Upload size={36} color="var(--text-secondary)" style={{ opacity: 0.6 }} />
+                <h4 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700 }}>Importação de Apólices</h4>
+                <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: "1.4" }}>
+                  A importação de PDFs e extração de dados via IA está otimizada para uso em computadores. 
+                  Por favor, acesse a plataforma a partir de um desktop para carregar novos arquivos.
+                </p>
               </div>
             </div>
           )}
@@ -1375,6 +1414,26 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         <div className={`toast ${toast.type === "error" ? "toast-error" : ""}`}>
           {toast.type === "error" ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
           <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* BOTTOM NAVIGATION FOR ADMINS ON MOBILE */}
+      {profile?.role === "admin" && (
+        <div className="bottom-nav">
+          <button 
+            className={`bottom-nav-item ${!isAdminView ? "active" : ""}`}
+            onClick={() => setIsAdminView(false)}
+          >
+            <Search size={20} />
+            <span>Busca</span>
+          </button>
+          <button 
+            className={`bottom-nav-item ${isAdminView ? "active" : ""}`}
+            onClick={() => setIsAdminView(true)}
+          >
+            <Shield size={20} />
+            <span>Admin</span>
+          </button>
         </div>
       )}
     </div>
