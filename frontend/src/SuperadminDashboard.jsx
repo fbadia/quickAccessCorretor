@@ -292,14 +292,27 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
   return (
     <div className="app-wrapper" data-theme={theme}>
       {/* HEADER */}
-      <header className="app-header">
-        <div className="header-left">
-          <div className="logo-area">
+      <header className="app-header" style={{ padding: 0 }}>
+        <div style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          width: "100%",
+          maxWidth: "1200px",
+          margin: "0 auto",
+          padding: "20px 1.5rem"
+        }}>
+          <div className="logo-container" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <img src="/favicon.svg" alt="Logo" style={{ width: 32, height: 32 }} />
-            <div>
-              <span className="app-title">QuickAccess</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className="logo-text" style={{
+                fontSize: "1.25rem",
+                fontWeight: 800,
+                background: "linear-gradient(135deg, var(--text-primary) 30%, #863bff 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent"
+              }}>QuickAccess</span>
               <span style={{
-                marginLeft: "0.5rem",
                 fontSize: "0.7rem",
                 background: "linear-gradient(135deg, #863bff, #6a2dd4)",
                 color: "#fff",
@@ -310,18 +323,30 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
               }}>SUPERADMIN</span>
             </div>
           </div>
-        </div>
-        <div className="header-right">
-          <button onClick={onToggleTheme} className="icon-btn" title="Alternar tema">
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-          <div className="user-badge">
-            <ShieldCheck size={16} style={{ color: "#863bff" }} />
-            <span>{profile?.name || profile?.email}</span>
+
+          <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <button onClick={onToggleTheme} className="icon-btn" title="Alternar tema">
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <div className="user-badge" style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 12px",
+              backgroundColor: "rgba(134, 59, 255, 0.1)",
+              border: "1px solid rgba(134, 59, 255, 0.2)",
+              borderRadius: "20px",
+              fontSize: "0.85rem",
+              fontWeight: 500,
+              color: "var(--text-primary)"
+            }}>
+              <ShieldCheck size={16} style={{ color: "#863bff" }} />
+              <span>{profile?.name || profile?.email}</span>
+            </div>
+            <button onClick={onLogout} className="icon-btn" title="Sair">
+              <LogOut size={18} />
+            </button>
           </div>
-          <button onClick={onLogout} className="icon-btn" title="Sair">
-            <LogOut size={18} />
-          </button>
         </div>
       </header>
 
