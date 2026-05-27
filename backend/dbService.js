@@ -41,8 +41,9 @@ export async function isFileProcessed(supabase, storagePath, organizationId) {
  * @param {string} storagePath Caminho do arquivo no Supabase Storage.
  * @param {Object} extractedData Dados extraídos pela API do Gemini.
  * @param {string} organizationId UUID da organização dona dos dados.
+ * @param {string} [fileHash] Hash SHA-256 do arquivo PDF.
  */
-export async function savePolicyData(supabase, storagePath, extractedData, organizationId) {
+export async function savePolicyData(supabase, storagePath, extractedData, organizationId, fileHash = null) {
   if (!organizationId) {
     throw new Error("organizationId é obrigatório para salvar dados de apólice.");
   }
@@ -114,6 +115,7 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
           start_date: startDate,
           end_date: endDate,
           storage_path: storagePath,
+          file_hash: fileHash,
           raw_extracted_data: extractedData,
           organization_id: organizationId
         },

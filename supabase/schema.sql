@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS public.policies (
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     storage_path TEXT UNIQUE,
+    file_hash TEXT,
     raw_extracted_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -57,6 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_vehicles_plate ON public.vehicles (UPPER(plate));
 CREATE INDEX IF NOT EXISTS idx_clients_name ON public.clients USING gin (to_tsvector('portuguese', name));
 CREATE INDEX IF NOT EXISTS idx_policies_client_id ON public.policies (client_id);
 CREATE INDEX IF NOT EXISTS idx_vehicles_policy_id ON public.vehicles (policy_id);
+CREATE INDEX IF NOT EXISTS idx_policies_file_hash ON public.policies (file_hash);
 
 -- Enable Row Level Security (RLS) on all tables
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
