@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import multer from "multer";
+import crypto from "crypto";
 import { extractPolicyData } from "./geminiService.js";
 import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedSuperAdmin } from "./dbService.js";
 import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage } from "./storageService.js";
@@ -702,16 +703,41 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
   try {
     console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
 
-    // 1. Fazer upload para o Supabase Storage (S3) no caminho "orgId/fileName"
+    // 1. Calcular o hash SHA-256 do arquivo em memória
+    const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
+
+    // 2. Verificar se o hash já foi processado por esta organização
+    const { data: existingPolicy, error: findError } = await supabase
+      .from("policies")
+      .select("id, raw_extracted_data")
+      .eq("file_hash", fileHash)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+
+    if (findError) {
+      console.error(`[Upload] Erro ao buscar hash da apólice:`, findError.message);
+    }
+
+    if (existingPolicy) {
+      console.log(`[Upload] Hash detectado. Evitando reprocessamento da apólice (ID: ${existingPolicy.id}) para org: ${orgId}`);
+      return res.status(200).json({
+        message: "Esta apólice já foi processada anteriormente.",
+        alreadyExists: true,
+        policyId: existingPolicy.id,
+        data: existingPolicy.raw_extracted_data
+      });
+    }
+
+    // 3. Fazer upload para o Supabase Storage (S3) no caminho "orgId/fileName"
     const storagePath = await uploadFileToStorage(supabase, orgId, fileName, file.buffer);
 
-    // 2. Extrair dados estruturados usando o Gemini API
+    // 4. Extrair dados estruturados usando o Gemini API
     const extractedData = await extractPolicyData(file.buffer, process.env.GEMINI_API_KEY);
 
-    // 3. Salvar informações extraídas na base de dados
-    const result = await savePolicyData(supabase, storagePath, extractedData, orgId);
+    // 5. Salvar informações extraídas na base de dados passando o fileHash
+    const result = await savePolicyData(supabase, storagePath, extractedData, orgId, fileHash);
 
-    // 4. Atualizar registro do último processamento da organização
+    // 6. Atualizar registro do último processamento da organização
     await supabase
       .from("organizations")
       .update({
@@ -722,6 +748,7 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
 
     res.status(201).json({
       message: `Arquivo ${fileName} processado com sucesso.`,
+      alreadyExists: false,
       policyId: result.policyId,
       data: extractedData
     });
