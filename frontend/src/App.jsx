@@ -21,7 +21,8 @@ import {
   CheckCircle2,
   Lock,
   LogIn,
-  FileText
+  FileText,
+  Upload
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { useRegisterSW } from "virtual:pwa-register/react";
@@ -54,8 +55,8 @@ export default function App() {
   const [inviteRole, setInviteRole] = useState("broker");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [usersList, setUsersList] = useState([]);
-  const [syncStatus, setSyncStatus] = useState(null);
-  const [syncLoading, setSyncLoading] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
   
   // UI states
   const [theme, setTheme] = useState("dark");
@@ -205,23 +206,9 @@ export default function App() {
         setUsersList(users || []);
       }
 
-      // 2. Buscar status da sincronização
-      fetchBackendSyncStatus();
+      // 2. Buscar status da sincronização (limpo para S3)
     } catch (err) {
       console.error("Erro ao buscar dados de admin:", err.message);
-    }
-  };
-
-  const fetchBackendSyncStatus = async () => {
-    try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
-      const res = await fetch(`${backendUrl}/sync/status`);
-      if (res.ok) {
-        const status = await res.json();
-        setSyncStatus(status);
-      }
-    } catch (err) {
-      console.warn("Backend offline ou não configurado para status de sync.");
     }
   };
 
@@ -341,38 +328,119 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
   };
 
-  // Disparar sincronização no backend (autenticada, org-aware)
-  const triggerBackendSync = async () => {
-    setSyncLoading(true);
-    try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
-      const token = session?.access_token;
-      const headers = { Authorization: `Bearer ${token}` };
+  const [isDragging, setIsDragging] = useState(false);
 
-      const res = await fetch(`${backendUrl}/sync`, { method: "POST", headers });
-      if (res.ok) {
-        showToast("Sincronização iniciada em segundo plano!");
-        const interval = setInterval(async () => {
-          const statusRes = await fetch(`${backendUrl}/sync/status`, { headers });
-          if (statusRes.ok) {
-            const status = await statusRes.json();
-            setSyncStatus(status);
-            if (status.status !== "running") {
-              clearInterval(interval);
-              fetchData();
-              showToast("Sincronização concluída!");
-            }
-          }
-        }, 3000);
-      } else {
-        const err = await res.json();
-        showToast(err.message || "Erro ao iniciar sincronização", "error");
-      }
-    } catch (err) {
-      showToast("Não foi possível conectar ao servidor backend", "error");
-    } finally {
-      setSyncLoading(false);
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addFilesToList(e.dataTransfer.files);
     }
+  };
+
+  const handleFileSelect = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      addFilesToList(e.target.files);
+    }
+  };
+
+  const addFilesToList = (files) => {
+    const pdfs = Array.from(files).filter(file => file.type === "application/pdf" || file.name.endsWith(".pdf"));
+    if (pdfs.length === 0) {
+      showToast("Apenas arquivos PDF são permitidos.", "error");
+      return;
+    }
+
+    const newEntries = pdfs.map(file => ({
+      file,
+      status: "pending",
+      message: "Aguardando processamento"
+    }));
+
+    setSelectedFiles(prev => [...prev, ...newEntries]);
+  };
+
+  const removeFileFromList = (index) => {
+    setSelectedFiles(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const clearFileList = () => {
+    setSelectedFiles([]);
+  };
+
+  const handleUploadAndProcess = async () => {
+    if (selectedFiles.length === 0) return;
+    setUploading(true);
+
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+    const token = session?.access_token;
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const current = selectedFiles[i];
+      if (current.status === "success") continue;
+
+      setSelectedFiles(prev => {
+        const copy = [...prev];
+        copy[i] = { ...copy[i], status: "uploading", message: "Enviando arquivo..." };
+        return copy;
+      });
+
+      const formData = new FormData();
+      formData.append("file", current.file);
+
+      try {
+        const res = await fetch(`${backendUrl}/api/policies/upload`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`
+          },
+          body: formData
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok) {
+          setSelectedFiles(prev => {
+            const copy = [...prev];
+            copy[i] = { 
+              ...copy[i], 
+              status: "success", 
+              message: `Sucesso! Apólice ${data.data?.apolice?.numero || ""} processada.` 
+            };
+            return copy;
+          });
+        } else {
+          setSelectedFiles(prev => {
+            const copy = [...prev];
+            copy[i] = { 
+              ...copy[i], 
+              status: "error", 
+              message: data.error || "Erro ao processar PDF." 
+            };
+            return copy;
+          });
+        }
+      } catch (err) {
+        setSelectedFiles(prev => {
+          const copy = [...prev];
+          copy[i] = { ...copy[i], status: "error", message: "Erro de conexão com o servidor." };
+          return copy;
+        });
+      }
+    }
+
+    setUploading(false);
+    fetchData(); // Atualizar apólices na busca principal
+    showToast("Envio e extração de apólices finalizados!");
   };
 
   // Cadastrar novo Corretor (Admin cria registro de usuário no backend)
@@ -577,68 +645,145 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
           {currentTab === "sync" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <div className="admin-card">
-                <h3 className="section-title" style={{ margin: 0 }}>Sincronização Google Drive</h3>
+                <h3 className="section-title" style={{ margin: 0 }}>Armazenamento Supabase Storage (S3)</h3>
                 <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-                  Importa e atualiza as apólices em PDF localizadas na pasta monitorada do Drive.
+                  Faça o upload direto dos arquivos PDF de suas apólices. Os dados serão extraídos automaticamente pela IA (Gemini) e os arquivos salvos de forma isolada por organização.
                 </p>
-                
-                {syncStatus && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                    <div className="sync-status-box">
-                      <span style={{ fontSize: "0.9rem" }}>Status do Servidor:</span>
-                      <div className="status-indicator">
-                        <span className={`indicator-dot dot-${syncStatus.status}`} />
-                        <span style={{ textTransform: "capitalize" }}>{syncStatus.status}</span>
-                      </div>
-                    </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "0.85rem" }}>
-                      <div className="sync-status-box" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-                        <span style={{ color: "var(--text-secondary)" }}>Total Lidos:</span>
-                        <strong style={{ fontSize: "1.2rem" }}>{syncStatus.totalFiles}</strong>
-                      </div>
-                      <div className="sync-status-box" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-                        <span style={{ color: "var(--text-secondary)" }}>Novas Apólices:</span>
-                        <strong style={{ fontSize: "1.2rem", color: "var(--accent-color)" }}>{syncStatus.successCount}</strong>
-                      </div>
-                    </div>
+                {/* Área de Drag & Drop */}
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => document.getElementById("file-upload-input").click()}
+                  style={{
+                    border: isDragging ? "2px dashed #863bff" : "2px dashed rgba(255, 255, 255, 0.15)",
+                    background: isDragging ? "rgba(134, 59, 255, 0.05)" : "rgba(255, 255, 255, 0.02)",
+                    borderRadius: "12px",
+                    padding: "2.5rem 1.5rem",
+                    textAlign: "center",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "10px"
+                  }}
+                >
+                  <input
+                    id="file-upload-input"
+                    type="file"
+                    multiple
+                    accept=".pdf"
+                    onChange={handleFileSelect}
+                    style={{ display: "none" }}
+                  />
+                  <Upload size={32} color={isDragging ? "#863bff" : "var(--text-secondary)"} style={{ opacity: 0.8 }} />
+                  <span style={{ fontSize: "0.95rem", fontWeight: 500 }}>
+                    Arrastar e soltar PDFs de apólices aqui
+                  </span>
+                  <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                    ou clique para selecionar do seu computador (Máx. 10MB)
+                  </span>
+                </div>
 
-                    {syncStatus.lastRun && (
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", textAlign: "right" }}>
-                        Última execução: {new Date(syncStatus.lastRun).toLocaleString("pt-BR")}
+                {/* Lista de Arquivos Selecionados */}
+                {selectedFiles.length > 0 && (
+                  <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+                        Fila de Upload ({selectedFiles.length} arquivos)
                       </span>
-                    )}
+                      <button
+                        onClick={clearFileList}
+                        disabled={uploading}
+                        className="icon-btn"
+                        style={{ fontSize: "0.8rem", color: "var(--danger-color)", display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}
+                        title="Limpar todos os arquivos da fila"
+                      >
+                        Limpar Fila
+                      </button>
+                    </div>
 
-                    {syncStatus.errors && syncStatus.errors.length > 0 && (
-                      <div style={{ 
-                        marginTop: "10px", 
-                        padding: "10px", 
-                        backgroundColor: "rgba(239, 68, 68, 0.05)", 
-                        border: "1px solid rgba(239, 68, 68, 0.2)",
-                        borderRadius: "8px"
-                      }}>
-                        <span style={{ fontSize: "0.8rem", fontWeight: "bold", color: "var(--danger-color)" }}>Erros Recentes:</span>
-                        <div style={{ maxHeight: "80px", overflowY: "auto", fontSize: "0.75rem", marginTop: "4px" }}>
-                          {syncStatus.errors.map((e, idx) => (
-                            <div key={idx} style={{ marginBottom: "4px", color: "var(--text-secondary)" }}>
-                              • <strong>{e.file}</strong>: {e.error}
+                    <div style={{ 
+                      maxHeight: "260px", 
+                      overflowY: "auto", 
+                      border: "1px solid rgba(255, 255, 255, 0.06)", 
+                      borderRadius: "8px",
+                      background: "rgba(0, 0, 0, 0.1)"
+                    }}>
+                      {selectedFiles.map((fileEntry, idx) => {
+                        const sizeKB = (fileEntry.file.size / 1024).toFixed(1);
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              padding: "10px 12px",
+                              borderBottom: idx === selectedFiles.length - 1 ? "none" : "1px solid rgba(255, 255, 255, 0.04)",
+                              fontSize: "0.85rem"
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+                              <FileText size={16} style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+                              <div style={{ minWidth: 0, display: "flex", flexDirection: "column" }}>
+                                <span style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileEntry.file.name}>
+                                  {fileEntry.file.name}
+                                </span>
+                                <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                                  {sizeKB} KB • {fileEntry.message}
+                                </span>
+                              </div>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                              {fileEntry.status === "pending" && <Clock size={16} color="#9ca3af" title="Aguardando upload" />}
+                              {fileEntry.status === "uploading" && <RefreshCw size={16} className="animate-spin" color="#3b82f6" title="Enviando..." />}
+                              {fileEntry.status === "success" && <CheckCircle2 size={16} color="#22c55e" title="Sucesso" />}
+                              {fileEntry.status === "error" && <AlertTriangle size={16} color="#ef4444" title="Erro" />}
+                              
+                              <button
+                                onClick={() => removeFileFromList(idx)}
+                                disabled={uploading}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  color: "var(--text-muted)",
+                                  opacity: uploading ? 0.3 : 1
+                                }}
+                                title="Remover"
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      onClick={handleUploadAndProcess}
+                      className="primary-btn"
+                      disabled={uploading || selectedFiles.every(f => f.status === "success")}
+                      style={{ marginTop: "10px", width: "100%", justifyContent: "center" }}
+                    >
+                      {uploading ? (
+                        <>
+                          <RefreshCw className="animate-spin" size={18} />
+                          Processando Apólices...
+                        </>
+                      ) : (
+                        <>
+                          <Upload size={18} />
+                          Iniciar Upload e Extração
+                        </>
+                      )}
+                    </button>
                   </div>
                 )}
-
-                <button 
-                  onClick={triggerBackendSync} 
-                  className="primary-btn" 
-                  disabled={syncLoading || syncStatus?.status === "running"}
-                  style={{ marginTop: "8px" }}
-                >
-                  <RefreshCw className={syncLoading || syncStatus?.status === "running" ? "animate-spin" : ""} size={18} />
-                  Sincronizar Agora
-                </button>
               </div>
             </div>
           )}

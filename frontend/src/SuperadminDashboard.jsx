@@ -51,7 +51,6 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
   const [showEditOrgModal, setShowEditOrgModal] = useState(false);
   const [editingOrg, setEditingOrg] = useState(null);
   const [editOrgName, setEditOrgName] = useState("");
-  const [editOrgDriveId, setEditOrgDriveId] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
 
   // Modal de edição de usuário
@@ -172,7 +171,6 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
   const openEditOrgModal = (org) => {
     setEditingOrg(org);
     setEditOrgName(org.name || "");
-    setEditOrgDriveId(org.drive_folder_id || "");
     setShowEditOrgModal(true);
   };
 
@@ -185,8 +183,7 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
       await authFetch(`/superadmin/organizations/${editingOrg.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          name: editOrgName.trim(),
-          drive_folder_id: editOrgDriveId.trim() || null
+          name: editOrgName.trim()
         })
       });
       showToast("Organização atualizada com sucesso!");
@@ -407,7 +404,7 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                      {["Organização", "Status", "Usuários", "Apólices", "Última Sync", "Drive", "Ações"].map(h => (
+                      {["Organização", "Status", "Usuários", "Apólices", "Última Sync", "Ações"].map(h => (
                         <th key={h} style={{ padding: "0.75rem", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>{h}</th>
                       ))}
                     </tr>
@@ -434,11 +431,6 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                             {org.last_sync_status === "never" && <Clock size={13} color="#6b7280" />}
                             {formatDate(org.last_sync_at)}
                           </div>
-                        </td>
-                        <td style={{ padding: "0.875rem 0.75rem" }}>
-                          {org.drive_configured
-                            ? <Wifi size={15} color="#22c55e" title="Pasta configurada" />
-                            : <WifiOff size={15} color="#ef4444" title="Pasta não configurada" />}
                         </td>
                         <td style={{ padding: "0.875rem 0.75rem" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
@@ -659,16 +651,6 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                 onChange={e => setEditOrgName(e.target.value)}
                 required
                 autoFocus
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">ID da Pasta do Google Drive</label>
-              <input
-                className="form-input"
-                type="text"
-                value={editOrgDriveId}
-                onChange={e => setEditOrgDriveId(e.target.value)}
-                placeholder="ID do Google Drive"
               />
             </div>
             <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>

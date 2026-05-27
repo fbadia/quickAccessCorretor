@@ -28,7 +28,7 @@ CREATE TABLE public.policies (
     policy_number TEXT NOT NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
-    drive_file_id TEXT UNIQUE,
+    storage_path TEXT UNIQUE,
     raw_extracted_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -163,3 +163,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Create default storage bucket for policies
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('policies', 'policies', false)
+ON CONFLICT (id) DO NOTHING;

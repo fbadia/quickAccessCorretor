@@ -1,9 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { getDriveClient, listPdfFiles, downloadFile, createOrganizationFolder } from "./driveService.js";
+import multer from "multer";
 import { extractPolicyData } from "./geminiService.js";
 import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedSuperAdmin } from "./dbService.js";
+import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage } from "./storageService.js";
 
 dotenv.config();
 
@@ -29,17 +30,9 @@ app.use(express.json());
 // INICIALIZAÇÃO DE CLIENTES
 // ─────────────────────────────────────────────────────────────
 let supabase;
-let drive;
 
 try {
   supabase = getSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    drive = getDriveClient(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  } else {
-    console.warn("GOOGLE_SERVICE_ACCOUNT_JSON não configurado. Sincronização indisponível.");
-  }
-
   seedSuperAdmin(supabase);
 } catch (error) {
   console.error("Erro na inicialização:", error.message);
@@ -112,125 +105,21 @@ function requireOrgAdmin(req, res, next) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ESTADO DE SINCRONIZAÇÃO (em memória por org)
+// CONFIGURAÇÃO DO MULTER (Upload em memória)
 // ─────────────────────────────────────────────────────────────
-const syncStates = {}; // { [orgId]: syncState }
-
-function getSyncState(orgId) {
-  if (!syncStates[orgId]) {
-    syncStates[orgId] = {
-      status: "idle",
-      lastRun: null,
-      totalFiles: 0,
-      processedFiles: 0,
-      successCount: 0,
-      failCount: 0,
-      skippedCount: 0,
-      errors: []
-    };
-  }
-  return syncStates[orgId];
-}
-
-// ─────────────────────────────────────────────────────────────
-// FUNÇÃO DE SINCRONIZAÇÃO (org-aware)
-// ─────────────────────────────────────────────────────────────
-async function runSyncJobForOrg(orgId, driveFolderId) {
-  const state = getSyncState(orgId);
-
-  if (state.status === "running") {
-    console.log(`[Sync] Org ${orgId} já está sincronizando.`);
-    return;
-  }
-  if (!drive || !supabase) {
-    console.error("[Sync] Clientes não configurados.");
-    return;
-  }
-  if (!driveFolderId) {
-    console.warn(`[Sync] Org ${orgId} sem pasta do Drive configurada. Pulando.`);
-    return;
-  }
-
-  Object.assign(state, {
-    status: "running",
-    lastRun: new Date().toISOString(),
-    totalFiles: 0, processedFiles: 0,
-    successCount: 0, failCount: 0, skippedCount: 0,
-    errors: []
-  });
-
-  const syncStart = new Date().toISOString();
-
-  try {
-    console.log(`[Sync] Iniciando para org ${orgId}...`);
-    const files = await listPdfFiles(drive, driveFolderId);
-    state.totalFiles = files.length;
-    console.log(`[Sync] Org ${orgId}: ${files.length} PDFs encontrados.`);
-
-    for (const file of files) {
-      state.processedFiles++;
-      const { id: fileId, name: fileName } = file;
-
-      const processed = await isFileProcessed(supabase, fileId, orgId);
-      if (processed) {
-        state.skippedCount++;
-        continue;
-      }
-
-      try {
-        const pdfBuffer = await downloadFile(drive, fileId);
-        const extractedData = await extractPolicyData(pdfBuffer, process.env.GEMINI_API_KEY);
-        await savePolicyData(supabase, fileId, extractedData, orgId);
-        state.successCount++;
-      } catch (err) {
-        console.error(`[Sync] Erro em ${fileName}:`, err.message);
-        state.failCount++;
-        state.errors.push({ file: fileName, error: err.message, timestamp: new Date().toISOString() });
-      }
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // Limite de 10MB por arquivo
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "application/pdf") {
+      cb(null, true);
+    } else {
+      cb(new Error("Apenas arquivos PDF são permitidos."));
     }
-
-    state.status = "completed";
-
-    // Atualizar last_sync na org
-    await supabase
-      .from("organizations")
-      .update({
-        last_sync_at: syncStart,
-        last_sync_status: state.failCount > 0 && state.successCount === 0 ? "error" : "ok"
-      })
-      .eq("id", orgId);
-
-    console.log(`[Sync] Org ${orgId}: OK (${state.successCount} sucesso, ${state.failCount} falha, ${state.skippedCount} pulados)`);
-  } catch (error) {
-    console.error(`[Sync] Falha geral para org ${orgId}:`, error.message);
-    state.status = "failed";
-    state.errors.push({ file: "system", error: error.message, timestamp: new Date().toISOString() });
-
-    await supabase
-      .from("organizations")
-      .update({ last_sync_at: syncStart, last_sync_status: "error" })
-      .eq("id", orgId);
   }
-}
-
-/** Executa sync para todas as orgs ativas (polling automático). */
-async function runSyncAllOrgs() {
-  try {
-    const { data: orgs } = await supabase
-      .from("organizations")
-      .select("id, drive_folder_id")
-      .eq("status", "active")
-      .not("drive_folder_id", "is", null);
-
-    if (!orgs || orgs.length === 0) return;
-
-    for (const org of orgs) {
-      await runSyncJobForOrg(org.id, org.drive_folder_id);
-    }
-  } catch (err) {
-    console.error("[Sync] Erro no sync global:", err.message);
-  }
-}
+});
 
 // ─────────────────────────────────────────────────────────────
 // ROTAS
@@ -250,7 +139,7 @@ app.get("/superadmin/metrics", authenticate, requireSuperAdmin, async (req, res)
   try {
     const { data: orgs, error: orgsError } = await supabase
       .from("organizations")
-      .select("id, name, status, drive_folder_id, last_sync_at, last_sync_status, created_at");
+      .select("id, name, status, last_sync_at, last_sync_status, created_at");
 
     if (orgsError) throw orgsError;
 
@@ -280,8 +169,7 @@ app.get("/superadmin/metrics", authenticate, requireSuperAdmin, async (req, res)
     const enrichedOrgs = orgs.map(org => ({
       ...org,
       user_count: userCountMap[org.id] || 0,
-      policy_count: policyCountMap[org.id] || 0,
-      drive_configured: !!org.drive_folder_id
+      policy_count: policyCountMap[org.id] || 0
     }));
 
     res.json({
@@ -306,23 +194,12 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
   let createdUserId = null;
 
   try {
-    // 1. Criar a pasta no Drive
-    let driveFolderId = null;
-    if (drive && process.env.GOOGLE_DRIVE_FOLDER_ID) {
-      try {
-        driveFolderId = await createOrganizationFolder(drive, name.trim(), process.env.GOOGLE_DRIVE_FOLDER_ID);
-      } catch (driveErr) {
-        console.error("Erro ao criar pasta no Drive:", driveErr.message);
-      }
-    }
-
-    // 2. Inserir a Organização
+    // 1. Inserir a Organização no banco
     const { data: org, error: orgError } = await supabase
       .from("organizations")
       .insert({
         name: name.trim(),
-        status: "active",
-        drive_folder_id: driveFolderId
+        status: "active"
       })
       .select()
       .single();
@@ -330,7 +207,7 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
     if (orgError) throw orgError;
     createdOrgId = org.id;
 
-    // 3. Criar o usuário Admin no Auth
+    // 2. Criar o usuário Admin no Auth
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
       email: adminEmail.trim(),
       password: adminPassword,
@@ -345,7 +222,7 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
     }
     createdUserId = newUser.user.id;
 
-    // 4. Vincular o profile à Organização como admin
+    // 3. Vincular o profile à Organização como admin
     const { error: profileError } = await supabase
       .from("profiles")
       .upsert({
@@ -372,15 +249,14 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
   }
 });
 
-/** PATCH /superadmin/organizations/:orgId — Edita nome ou pasta do Drive */
+/** PATCH /superadmin/organizations/:orgId — Edita nome da Organização */
 app.patch("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, async (req, res) => {
   const { orgId } = req.params;
-  const { name, drive_folder_id } = req.body;
+  const { name } = req.body;
 
   try {
     const updateData = { updated_at: new Date().toISOString() };
     if (name?.trim()) updateData.name = name.trim();
-    if (drive_folder_id !== undefined) updateData.drive_folder_id = drive_folder_id;
 
     const { data, error } = await supabase
       .from("organizations")
@@ -397,7 +273,7 @@ app.patch("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, a
   }
 });
 
-/** DELETE /superadmin/organizations/:orgId — Exclui organização e todos os seus dados */
+/** DELETE /superadmin/organizations/:orgId — Exclui organização, todos os seus dados e arquivos */
 app.delete("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, async (req, res) => {
   const { orgId } = req.params;
 
@@ -416,13 +292,16 @@ app.delete("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, 
       }
     }
 
-    // 2. Deletar apólices, clientes, veículos e seguradoras associadas
+    // 2. Deletar arquivos armazenados no Supabase Storage
+    await deleteOrganizationFolderFromStorage(supabase, orgId);
+
+    // 3. Deletar apólices, clientes, veículos e seguradoras associadas
     await supabase.from("vehicles").delete().eq("organization_id", orgId);
     await supabase.from("policies").delete().eq("organization_id", orgId);
     await supabase.from("clients").delete().eq("organization_id", orgId);
     await supabase.from("insurers").delete().eq("organization_id", orgId);
 
-    // 3. Deletar a organização
+    // 4. Deletar a organização
     const { error: deleteOrgError } = await supabase
       .from("organizations")
       .delete()
@@ -431,7 +310,7 @@ app.delete("/superadmin/organizations/:orgId", authenticate, requireSuperAdmin, 
     if (deleteOrgError) throw deleteOrgError;
 
     console.log(`[SuperAdmin] Organização ${orgId} e todos os seus recursos foram excluídos.`);
-    res.json({ message: "Organização e todos os seus dados e usuários foram excluídos com sucesso." });
+    res.json({ message: "Organização e todos os seus dados, arquivos e usuários foram excluídos com sucesso." });
   } catch (err) {
     console.error("Erro ao deletar organização:", err.message);
     res.status(500).json({ error: "Erro ao deletar organização e seus dados." });
@@ -735,45 +614,72 @@ app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, re
 });
 
 // ─────────────────────────────────────────────────────────────
-// ROTAS DE SINCRONIZAÇÃO (org-aware)
+// ROTAS DE UPLOAD E PROCESSAMENTO DE APÓLICES
 // ─────────────────────────────────────────────────────────────
 
-/** GET /sync/status — Status do sync da org do usuário autenticado */
-app.get("/sync/status", authenticate, requireOrgAdmin, async (req, res) => {
+/**
+ * POST /api/policies/upload — Upload e processamento imediato de apólices em PDF
+ */
+app.post("/api/policies/upload", authenticate, upload.single("file"), async (req, res) => {
   const orgId = req.profile.organization_id;
-  res.json(getSyncState(orgId));
-});
-
-/** POST /sync — Dispara sync manual para a org do admin autenticado */
-app.post("/sync", authenticate, requireOrgAdmin, async (req, res) => {
-  const orgId = req.profile.organization_id;
-  const state = getSyncState(orgId);
-
-  if (state.status === "running") {
-    return res.status(409).json({ message: "Sincronização já está em andamento.", status: "running" });
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não possui organização associada para carregar arquivos." });
   }
 
-  // Buscar folder_id da org
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("drive_folder_id")
-    .eq("id", orgId)
-    .maybeSingle();
-
-  if (!org?.drive_folder_id) {
-    return res.status(503).json({ error: "Pasta do Google Drive não configurada para esta organização." });
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ error: "Nenhum arquivo PDF enviado no campo 'file'." });
   }
 
-  runSyncJobForOrg(orgId, org.drive_folder_id);
+  const fileName = file.originalname;
 
-  res.status(202).json({ message: "Sincronização iniciada.", status: "running" });
+  try {
+    console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
+
+    // 1. Fazer upload para o Supabase Storage (S3) no caminho "orgId/fileName"
+    const storagePath = await uploadFileToStorage(supabase, orgId, fileName, file.buffer);
+
+    // 2. Extrair dados estruturados usando o Gemini API
+    const extractedData = await extractPolicyData(file.buffer, process.env.GEMINI_API_KEY);
+
+    // 3. Salvar informações extraídas na base de dados
+    const result = await savePolicyData(supabase, storagePath, extractedData, orgId);
+
+    // 4. Atualizar registro do último processamento da organização
+    await supabase
+      .from("organizations")
+      .update({
+        last_sync_at: new Date().toISOString(),
+        last_sync_status: "ok"
+      })
+      .eq("id", orgId);
+
+    res.status(201).json({
+      message: `Arquivo ${fileName} processado com sucesso.`,
+      policyId: result.policyId,
+      data: extractedData
+    });
+  } catch (err) {
+    console.error(`[Upload] Erro ao processar arquivo ${fileName}:`, err.message);
+
+    // Atualizar status de erro da org no banco
+    await supabase
+      .from("organizations")
+      .update({
+        last_sync_at: new Date().toISOString(),
+        last_sync_status: "error"
+      })
+      .eq("id", orgId);
+
+    res.status(500).json({ error: `Erro ao processar ${fileName}: ${err.message}` });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
 // ROTA DE DOWNLOAD DE PDF
 // ─────────────────────────────────────────────────────────────
 
-/** GET /api/policies/:policyId/download — Proxy autenticado de PDF via Drive */
+/** GET /api/policies/:policyId/download — Proxy autenticado de PDF via Supabase Storage (S3) */
 app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
   try {
     const { policyId } = req.params;
@@ -786,17 +692,16 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
 
     const { data: policy, error: policyError } = await supabase
       .from("policies")
-      .select("drive_file_id, policy_number, organization_id")
+      .select("storage_path, policy_number, organization_id")
       .eq("id", policyId)
       .eq("organization_id", orgId) // Isola por org
       .maybeSingle();
 
     if (policyError || !policy) return res.status(404).json({ error: "Apólice não encontrada." });
-    if (!policy.drive_file_id) return res.status(404).json({ error: "Apólice sem arquivo PDF associado." });
-    if (!drive) return res.status(503).json({ error: "Integração com Google Drive não configurada." });
+    if (!policy.storage_path) return res.status(404).json({ error: "Apólice sem arquivo PDF associado." });
 
-    console.log(`[PDF] Usuário ${req.user.email} → apólice ${policy.policy_number}`);
-    const pdfBuffer = await downloadFile(drive, policy.drive_file_id);
+    console.log(`[PDF] Usuário ${req.user.email} → baixando do Storage: ${policy.storage_path}`);
+    const pdfBuffer = await downloadFileFromStorage(supabase, policy.storage_path);
     const safeFileName = `apolice-${policy.policy_number || policyId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
     res.setHeader("Content-Type", "application/pdf");
@@ -817,11 +722,5 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
-
-  const intervalMinutes = 10;
-  console.log(`Polling automático ativado: a cada ${intervalMinutes} minutos.`);
-  setInterval(() => {
-    console.log("[Sync] Executando sincronização automática de todas as orgs...");
-    runSyncAllOrgs();
-  }, intervalMinutes * 60 * 1000);
+  console.log(`Supabase Storage ativado e integrado para armazenamento de apólices.`);
 });

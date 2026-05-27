@@ -16,21 +16,21 @@ export function getSupabaseClient(supabaseUrl, serviceRoleKey) {
 }
 
 /**
- * Verifica se um arquivo do Drive já foi processado para uma organização específica.
+ * Verifica se um arquivo no Supabase Storage já foi processado para uma organização específica.
  */
-export async function isFileProcessed(supabase, fileId, organizationId) {
+export async function isFileProcessed(supabase, storagePath, organizationId) {
   try {
     const { data, error } = await supabase
       .from("policies")
       .select("id")
-      .eq("drive_file_id", fileId)
+      .eq("storage_path", storagePath)
       .eq("organization_id", organizationId)
       .maybeSingle();
 
     if (error) throw error;
     return !!data;
   } catch (error) {
-    console.error(`Erro ao verificar arquivo processado ${fileId}:`, error);
+    console.error(`Erro ao verificar arquivo processado ${storagePath}:`, error);
     return false;
   }
 }
@@ -38,11 +38,11 @@ export async function isFileProcessed(supabase, fileId, organizationId) {
 /**
  * Salva as informações extraídas no banco de dados, vinculadas a uma organização.
  * @param {Object} supabase Cliente do Supabase (service role).
- * @param {string} fileId ID do arquivo no Google Drive.
+ * @param {string} storagePath Caminho do arquivo no Supabase Storage.
  * @param {Object} extractedData Dados extraídos pela API do Gemini.
  * @param {string} organizationId UUID da organização dona dos dados.
  */
-export async function savePolicyData(supabase, fileId, extractedData, organizationId) {
+export async function savePolicyData(supabase, storagePath, extractedData, organizationId) {
   if (!organizationId) {
     throw new Error("organizationId é obrigatório para salvar dados de apólice.");
   }
@@ -113,11 +113,11 @@ export async function savePolicyData(supabase, fileId, extractedData, organizati
           policy_number: policyNumber,
           start_date: startDate,
           end_date: endDate,
-          drive_file_id: fileId,
+          storage_path: storagePath,
           raw_extracted_data: extractedData,
           organization_id: organizationId
         },
-        { onConflict: "drive_file_id" }
+        { onConflict: "storage_path" }
       )
       .select("id")
       .single();
@@ -149,7 +149,7 @@ export async function savePolicyData(supabase, fileId, extractedData, organizati
     console.log(`Sucesso ao salvar apólice ${policyNumber} de ${clientName} (Org: ${organizationId})`);
     return { success: true, policyId: policy.id };
   } catch (error) {
-    console.error(`Erro ao salvar dados da apólice (File ID: ${fileId}):`, error);
+    console.error(`Erro ao salvar dados da apólice (Storage Path: ${storagePath}):`, error);
     throw error;
   }
 }

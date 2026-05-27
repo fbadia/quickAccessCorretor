@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS organizations (
   name              TEXT NOT NULL,
   status            TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'disabled')),
-  drive_folder_id   TEXT,
   last_sync_at      TIMESTAMPTZ,
   last_sync_status  TEXT DEFAULT 'never'
                     CHECK (last_sync_status IN ('never', 'ok', 'error')),
@@ -45,6 +44,20 @@ ALTER TABLE profiles
 -- Primeiro remover NOT NULL constraint temporariamente para migração
 -- (as tabelas serão truncadas logo após)
 ALTER TABLE policies  ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id);
+
+-- Renomear drive_file_id para storage_path de forma condicional se ela existir
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name='policies' AND column_name='drive_file_id'
+  ) THEN
+    ALTER TABLE policies RENAME COLUMN drive_file_id TO storage_path;
+  END IF;
+END $$;
+
+-- Garantir que a coluna storage_path exista e seja do tipo TEXT UNIQUE
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS storage_path TEXT UNIQUE;
 ALTER TABLE clients   ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id);
 ALTER TABLE vehicles  ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id);
 ALTER TABLE insurers  ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id);
@@ -268,6 +281,15 @@ CREATE INDEX IF NOT EXISTS idx_policies_organization_id  ON policies(organizatio
 CREATE INDEX IF NOT EXISTS idx_clients_organization_id   ON clients(organization_id);
 CREATE INDEX IF NOT EXISTS idx_vehicles_organization_id  ON vehicles(organization_id);
 CREATE INDEX IF NOT EXISTS idx_insurers_organization_id  ON insurers(organization_id);
+
+-- ─────────────────────────────────────────────────────────────
+-- ETAPA 12: Inicialização do Supabase Storage
+-- ─────────────────────────────────────────────────────────────
+
+-- Criar bucket policies privado caso não exista
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('policies', 'policies', false)
+ON CONFLICT (id) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────
 -- FIM DA MIGRAÇÃO

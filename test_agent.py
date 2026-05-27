@@ -219,12 +219,8 @@ class TestAgent:
                         "id": o_id,
                         "name": o_data["name"],
                         "status": o_data["status"],
-                        "drive_folder_id": o_data.get("drive_folder_id", "folder-123"),
-                        "last_sync_at": o_data.get("last_sync_at"),
-                        "last_sync_status": o_data.get("last_sync_status", "never"),
                         "user_count": len([u for u in self.users.values() if u.get("organization_id") == o_id]),
-                        "policy_count": 0,
-                        "drive_configured": True
+                        "policy_count": 0
                     })
                 return 200, {
                     "total_organizations": len(self.orgs),
@@ -234,18 +230,35 @@ class TestAgent:
 
             if path == "/superadmin/organizations" and method == "POST":
                 name = json_data.get("name", "").strip()
-                if not name:
-                    return 400, {"error": "Nome da organização é obrigatório."}
+                admin_email = json_data.get("adminEmail", "").strip()
+                admin_password = json_data.get("adminPassword")
+                admin_name = json_data.get("adminName", "").strip()
+                
+                if not name or not admin_email or not admin_password or not admin_name:
+                    return 400, {"error": "Campos obrigatórios: Nome da Org, Nome do Admin, E-mail do Admin e Senha do Admin."}
+                
                 org_id = f"org-uuid-{len(self.orgs) + 1}"
                 new_org = {
                     "id": org_id,
                     "name": name,
                     "status": "active",
-                    "drive_folder_id": f"drive-folder-{org_id}",
                     "created_at": datetime.now().isoformat()
                 }
                 self.orgs[org_id] = new_org
-                return 201, {"message": "Organização criada com sucesso.", "organization": new_org}
+                
+                # Criar também o administrador correspondente no profiles mock
+                user_id = f"user-uuid-{len(self.users) + 1}"
+                self.users[user_id] = {
+                    "id": user_id,
+                    "email": admin_email,
+                    "name": admin_name,
+                    "role": "admin",
+                    "organization_id": org_id,
+                    "is_active": True,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                return 201, {"message": "Organização e Administrador criados com sucesso.", "organization": new_org}
 
             match_org_status = re.match(r"^/superadmin/organizations/([^/]+)/status$", path)
             if match_org_status and method == "PATCH":
@@ -395,7 +408,13 @@ class TestAgent:
         # CASO 4: Criação de Organização (Superadmin)
         # ─────────────────────────────────────────────────────────────
         org_name = f"Nova Org Agente Teste {int(time.time())}"
-        code, body = self.call_api("POST", "/superadmin/organizations", json_data={"name": org_name}, token=self.tokens["superadmin"])
+        payload_org = {
+            "name": org_name,
+            "adminEmail": f"admin_teste_{int(time.time())}@agent.com",
+            "adminPassword": "SenhaSegura123!",
+            "adminName": "Admin Inicial"
+        }
+        code, body = self.call_api("POST", "/superadmin/organizations", json_data=payload_org, token=self.tokens["superadmin"])
         new_org_id = body.get("organization", {}).get("id")
         self.log_test_result(
             "Caso 4: Criação de Organização pelo Superadmin",
