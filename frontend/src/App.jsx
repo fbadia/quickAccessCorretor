@@ -27,7 +27,8 @@ import {
   Trash2,
   ToggleLeft,
   ToggleRight,
-  X
+  X,
+  Zap
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { useRegisterSW } from "virtual:pwa-register/react";
@@ -148,7 +149,7 @@ export default function App() {
     try {
       const { data, error } = await supabase
         .from("profiles")
-        .select("*")
+        .select("*, organization:organizations(name)")
         .eq("id", userId)
         .single();
       
@@ -717,19 +718,41 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     <div className="app-container">
       {/* HEADER */}
       <header>
-        <div className="logo-container" onClick={() => setIsAdminView(false)} style={{ cursor: "pointer" }}>
-          <Shield className="logo-icon" size={24} />
-          <span className="logo-text">QuickAccess</span>
+        <div className="logo-container" onClick={() => setIsAdminView(false)} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}>
+          <Zap className="logo-icon" size={24} />
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <span className="logo-text">QuickAccess</span>
+            {profile?.organization?.name && (
+              <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 500, marginTop: "-2px" }}>
+                {profile.organization.name}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="header-actions">
+        <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           {profile?.role === "admin" && (
             <button 
-              className={`icon-btn ${isAdminView ? "active" : ""}`} 
               onClick={() => setIsAdminView(!isAdminView)}
-              title="Painel Admin"
-              style={{ color: isAdminView ? "var(--accent-color)" : "inherit" }}
+              className="primary-btn"
+              style={{
+                padding: "6px 14px",
+                fontSize: "0.82rem",
+                background: isAdminView 
+                  ? "rgba(255, 255, 255, 0.05)" 
+                  : "linear-gradient(135deg, var(--accent-color), var(--secondary-accent))",
+                border: isAdminView ? "1px solid var(--border-color)" : "none",
+                color: "var(--text-primary)",
+                borderRadius: "20px",
+                height: "34px",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                width: "auto"
+              }}
             >
-              <Shield size={20} />
+              {isAdminView ? <Search size={14} /> : <Shield size={14} />}
+              {isAdminView ? "Ir para Busca" : "Painel Admin"}
             </button>
           )}
           <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
@@ -749,7 +772,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
               className={`tab-btn ${currentTab === "sync" ? "active" : ""}`}
               onClick={() => setCurrentTab("sync")}
             >
-              Monitoramento
+              Importar Apólices (PDF)
             </button>
             <button 
               className={`tab-btn ${currentTab === "users" ? "active" : ""}`}
@@ -761,6 +784,37 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
           {currentTab === "sync" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Box de Guia Rápido de Onboarding */}
+              <div className="admin-card" style={{
+                background: "linear-gradient(135deg, rgba(134, 59, 255, 0.08), rgba(6, 182, 212, 0.08))",
+                borderColor: "rgba(134, 59, 255, 0.2)",
+                padding: "20px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px"
+              }}>
+                <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#863bff", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Info size={16} /> Guia de Configuração da Corretora
+                </h4>
+                <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: "1.4" }}>
+                  Siga os passos abaixo para configurar o espaço da sua organização:
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px", fontSize: "0.82rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "18px", height: "18px", borderRadius: "50%", background: "#863bff", color: "#fff", fontSize: "0.75rem", fontWeight: "bold", flexShrink: 0 }}>1</span>
+                    <span><strong>Importe suas apólices:</strong> Use a área de upload abaixo para carregar os PDFs das apólices. A IA fará a extração em tempo real.</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "18px", height: "18px", borderRadius: "50%", background: "#863bff", color: "#fff", fontSize: "0.75rem", fontWeight: "bold", flexShrink: 0 }}>2</span>
+                    <span><strong>Cadastre sua equipe:</strong> Vá na aba <strong>Corretores</strong> acima para adicionar corretores da sua equipe.</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "18px", height: "18px", borderRadius: "50%", background: "#863bff", color: "#fff", fontSize: "0.75rem", fontWeight: "bold", flexShrink: 0 }}>3</span>
+                    <span><strong>Realize buscas:</strong> Clique em "Ir para Busca" no topo para consultar placas, nomes ou CPFs em segundos.</span>
+                  </div>
+                </div>
+              </div>
+
               <div className="admin-card">
                 <h3 className="section-title" style={{ margin: 0 }}>Armazenamento Supabase Storage (S3)</h3>
                 <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>
@@ -955,6 +1009,11 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                       <option value="broker">Corretor (Apenas Consulta)</option>
                       <option value="admin">Administrador (Consulta e Sync)</option>
                     </select>
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", marginTop: "6px", display: "block", lineHeight: "1.4" }}>
+                      * <strong>Administrador:</strong> Acesso total para importar apólices e gerenciar corretores.
+                      <br />
+                      * <strong>Corretor:</strong> Acesso exclusivo para busca e visualização de apólices seguradas.
+                    </span>
                   </div>
                   <button type="submit" className="primary-btn" disabled={inviteLoading} style={{ marginTop: "4px" }}>
                     <UserPlus size={18} />
