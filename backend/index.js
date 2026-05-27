@@ -583,6 +583,72 @@ app.patch("/admin/users/:userId/role", authenticate, requireOrgAdmin, async (req
   }
 });
 
+/** PATCH /admin/users/:userId — Edita informações gerais de um usuário da org */
+app.patch("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { name, email, role, password, is_active } = req.body;
+
+  try {
+    // 1. Verificar se o usuário pertence à mesma organização do admin
+    const { data: targetUser, error: checkError } = await supabase
+      .from("profiles")
+      .select("id, role, organization_id")
+      .eq("id", userId)
+      .eq("organization_id", req.profile.organization_id)
+      .maybeSingle();
+
+    if (checkError) throw checkError;
+    if (!targetUser) {
+      return res.status(404).json({ error: "Usuário não encontrado na sua organização." });
+    }
+
+    // 2. Atualizar dados no Auth do Supabase se necessário
+    const authUpdateData = {};
+    if (email?.trim()) authUpdateData.email = email.trim();
+    if (password) authUpdateData.password = password;
+    
+    // Atualizar metadados do Auth
+    const userMetadata = {};
+    if (name?.trim()) userMetadata.name = name.trim();
+    if (role) {
+      if (!["admin", "broker"].includes(role)) {
+        return res.status(400).json({ error: "Role inválida. Use 'admin' ou 'broker'." });
+      }
+      userMetadata.role = role;
+    }
+    if (Object.keys(userMetadata).length > 0) {
+      authUpdateData.user_metadata = userMetadata;
+    }
+
+    if (Object.keys(authUpdateData).length > 0) {
+      const { error: authError } = await supabase.auth.admin.updateUserById(userId, authUpdateData);
+      if (authError) return res.status(400).json({ error: `Erro ao atualizar usuário no Auth: ${authError.message}` });
+    }
+
+    // 3. Atualizar tabela profiles
+    const profileUpdateData = {};
+    if (name?.trim()) profileUpdateData.name = name.trim();
+    if (email?.trim()) profileUpdateData.email = email.trim();
+    if (role) profileUpdateData.role = role;
+    if (is_active !== undefined) profileUpdateData.is_active = is_active;
+
+    const { data: updatedProfile, error: profError } = await supabase
+      .from("profiles")
+      .update(profileUpdateData)
+      .eq("id", userId)
+      .eq("organization_id", req.profile.organization_id)
+      .select()
+      .single();
+
+    if (profError) throw profError;
+
+    res.json({ message: "Usuário atualizado com sucesso.", profile: updatedProfile });
+  } catch (err) {
+    console.error("Erro ao editar usuário da organização:", err.message);
+    res.status(500).json({ error: "Erro ao editar usuário." });
+  }
+});
+
 /** DELETE /admin/users/:userId — Remove usuário da org */
 app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, res) => {
   const { userId } = req.params;

@@ -22,7 +22,12 @@ import {
   Lock,
   LogIn,
   FileText,
-  Upload
+  Upload,
+  Edit,
+  Trash2,
+  ToggleLeft,
+  ToggleRight,
+  X
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { useRegisterSW } from "virtual:pwa-register/react";
@@ -57,6 +62,15 @@ export default function App() {
   const [usersList, setUsersList] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
+  
+  // States para edição de usuários pelo Admin
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editUserName, setEditUserName] = useState("");
+  const [editUserEmail, setEditUserEmail] = useState("");
+  const [editUserRole, setEditUserRole] = useState("broker");
+  const [editUserPassword, setEditUserPassword] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
   
   // UI states
   const [theme, setTheme] = useState("dark");
@@ -483,6 +497,109 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
   };
 
+  // Abrir modal de edição de usuário
+  const openEditUserModal = (user) => {
+    setEditingUser(user);
+    setEditUserName(user.name || "");
+    setEditUserEmail(user.email || "");
+    setEditUserRole(user.role || "broker");
+    setEditUserPassword("");
+    setShowEditUserModal(true);
+  };
+
+  // Salvar usuário editado
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    if (!editUserName.trim() || !editUserEmail.trim()) return;
+
+    setSavingUser(true);
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const body = {
+        name: editUserName.trim(),
+        email: editUserEmail.trim(),
+        role: editUserRole
+      };
+      if (editUserPassword) {
+        body.password = editUserPassword;
+      }
+
+      const response = await fetch(`${backendUrl}/admin/users/${editingUser.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify(body)
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Erro ao atualizar corretor.");
+      }
+
+      showToast("Corretor atualizado com sucesso!");
+      setShowEditUserModal(false);
+      fetchAdminData();
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  // Toggle de status do usuário (is_active)
+  const toggleUserStatus = async (userId, currentStatus) => {
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({ is_active: !currentStatus })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Erro ao alterar status do corretor.");
+      }
+
+      showToast(`Corretor ${!currentStatus ? "ativado" : "desativado"} com sucesso!`);
+      fetchAdminData();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  // Excluir usuário
+  const handleDeleteUser = async (userId, userEmail) => {
+    if (!window.confirm(`Tem certeza que deseja EXCLUIR permanentemente o corretor "${userEmail}"?`)) {
+      return;
+    }
+
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${session?.access_token}`
+        }
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Erro ao excluir corretor.");
+      }
+
+      showToast("Corretor excluído com sucesso!");
+      fetchAdminData();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
   // Funções Auxiliares
   const formatDate = (dateStr) => {
     if (!dateStr) return "N/A";
@@ -852,11 +969,49 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                 <div className="user-list">
                   {usersList.map((u) => (
                     <div key={u.id} className="user-item">
-                      <div className="user-item-info">
-                        <span className="user-item-name">{u.name}</span>
-                        <span className="user-item-email">{u.email}</span>
+                      <div className="user-item-info" style={{ flex: 1, minWidth: 0 }}>
+                        <span className="user-item-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
+                        <span className="user-item-email" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.75rem", color: "var(--text-secondary)" }}>{u.email}</span>
                       </div>
-                      <span className={`role-tag role-${u.role}`}>{u.role}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span className={`role-tag role-${u.role}`}>{u.role}</span>
+                        <span className={`status-badge ${u.is_active ? "status-active" : "status-expired"}`} style={{ fontSize: "0.75rem", padding: "2px 6px" }}>
+                          {u.is_active ? "Ativo" : "Inativo"}
+                        </span>
+                        
+                        {/* Ações (Apenas se não for o próprio usuário logado) */}
+                        {u.id !== session?.user?.id ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            <button
+                              onClick={() => toggleUserStatus(u.id, u.is_active)}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}
+                              title={u.is_active ? "Desativar corretor" : "Ativar corretor"}
+                            >
+                              {u.is_active
+                                ? <ToggleRight size={20} color="#22c55e" />
+                                : <ToggleLeft size={20} color="#6b7280" />}
+                            </button>
+                            <button
+                              onClick={() => openEditUserModal(u)}
+                              title="Editar"
+                              className="icon-btn"
+                              style={{ padding: "4px" }}
+                            >
+                              <Edit size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(u.id, u.email)}
+                              title="Excluir"
+                              className="icon-btn"
+                              style={{ padding: "4px", color: "var(--danger-color)" }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic", padding: "4px" }}>Você</span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1067,6 +1222,89 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
               </div>
             </div>
           )}
+        </div>
+      )}
+      {/* MODAL DE EDIÇÃO DE USUÁRIO (PARA ADMIN DA ORG) */}
+      {showEditUserModal && editingUser && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 1000,
+          background: "rgba(0,0,0,0.6)",
+          backdropFilter: "blur(4px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1rem"
+        }}>
+          <div style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "var(--border-radius-lg)",
+            padding: "1.5rem",
+            width: "100%",
+            maxWidth: "440px",
+            boxShadow: "var(--shadow-lg)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+              <h3 style={{ margin: 0, fontSize: "1.1rem" }}>Editar Corretor</h3>
+              <button onClick={() => setShowEditUserModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+                <X size={20} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleSaveUser} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Nome Completo</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={editUserName}
+                  onChange={e => setEditUserName(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">E-mail</label>
+                <input
+                  className="form-input"
+                  type="email"
+                  value={editUserEmail}
+                  onChange={e => setEditUserEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Nova Senha (Opcional)</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={editUserPassword}
+                  onChange={e => setEditUserPassword(e.target.value)}
+                  placeholder="Deixe em branco para manter a atual"
+                  minLength={6}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Acesso / Role</label>
+                <select
+                  className="form-select"
+                  value={editUserRole}
+                  onChange={e => setEditUserRole(e.target.value)}
+                >
+                  <option value="broker">Corretor (Apenas Consulta)</option>
+                  <option value="admin">Administrador (Consulta e Sync)</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                <button type="button" className="secondary-btn" style={{ padding: "10px 16px" }} onClick={() => setShowEditUserModal(false)}>Cancelar</button>
+                <button type="submit" className="primary-btn" style={{ padding: "10px 16px" }} disabled={savingUser}>
+                  {savingUser ? "Salvando..." : "Salvar Alterações"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
