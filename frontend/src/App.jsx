@@ -227,6 +227,7 @@ export default function App() {
           )
         `)
         .eq("is_current", true)
+        .eq("organization_id", profile.organization_id)  // defesa em profundidade além do RLS
         .order("created_at", { ascending: false });
 
       if (error) throw error;
