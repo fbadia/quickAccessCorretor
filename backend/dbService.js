@@ -306,3 +306,327 @@ export async function seedSuperAdmin(supabase) {
     console.error("Erro inesperado no seed do superadmin:", err.message);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// ENDOSSOS
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Normaliza um número de apólice removendo tudo que não seja letra ou dígito,
+ * e convertendo para maiúsculas. Mesmo padrão aplicado pelo prompt do Gemini.
+ * @param {string} policyNumber
+ * @returns {string}
+ */
+function normalizePolicyNumber(policyNumber) {
+  if (!policyNumber) return "";
+  return policyNumber.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+/**
+ * Aplica as alterações de um endosso nas tabelas de negócio (policies, clients, vehicles).
+ * Chamado tanto no fluxo de upload quanto na vinculação manual.
+ *
+ * @param {Object} supabase  Cliente do Supabase (service role).
+ * @param {string} policyId  UUID da apólice base a ser atualizada.
+ * @param {string} endorsementType  Tipo do endosso.
+ * @param {Object} changes   Objeto com os campos alterados (pode ter nulls).
+ * @param {Object} rawExtractedData  JSON completo extraído pelo Gemini.
+ */
+async function applyEndorsementChanges(supabase, policyId, endorsementType, changes, rawExtractedData) {
+  // 1. Buscar a apólice para obter client_id
+  const { data: policy, error: policyFetchError } = await supabase
+    .from("policies")
+    .select("id, client_id")
+    .eq("id", policyId)
+    .maybeSingle();
+
+  if (policyFetchError || !policy) {
+    throw new Error(`Não foi possível buscar a apólice ${policyId} para aplicar o endosso.`);
+  }
+
+  // 2. Aplicar alterações conforme o tipo
+  if (endorsementType === "vehicle_change") {
+    // Marcar veículo atual como substituído
+    await supabase
+      .from("vehicles")
+      .update({ is_current: false, replaced_at: new Date().toISOString() })
+      .eq("policy_id", policyId)
+      .eq("is_current", true);
+
+    // Inserir novo veículo vigente
+    if (changes.plate || changes.brand_model || changes.year) {
+      const { error: vehError } = await supabase
+        .from("vehicles")
+        .insert({
+          policy_id: policyId,
+          plate: changes.plate || null,
+          brand_model: changes.brand_model || null,
+          year: changes.year || null,
+          is_current: true,
+          organization_id: policy.organization_id
+        });
+      if (vehError) throw vehError;
+    }
+  }
+
+  if (endorsementType === "insured_change") {
+    const clientUpdate = {};
+    if (changes.insured_name) clientUpdate.name = changes.insured_name;
+    if (changes.cpf_cnpj) clientUpdate.cpf_cnpj = changes.cpf_cnpj;
+
+    if (Object.keys(clientUpdate).length > 0) {
+      const { error: cliError } = await supabase
+        .from("clients")
+        .update(clientUpdate)
+        .eq("id", policy.client_id);
+      if (cliError) throw cliError;
+    }
+  }
+
+  // Para todos os tipos: atualizar raw_extracted_data e datas da apólice se fornecidas
+  const policyUpdate = {
+    raw_extracted_data: rawExtractedData
+  };
+  if (changes.start_date) policyUpdate.start_date = changes.start_date;
+  if (changes.end_date) policyUpdate.end_date = changes.end_date;
+
+  const { error: polUpdateError } = await supabase
+    .from("policies")
+    .update(policyUpdate)
+    .eq("id", policyId);
+  if (polUpdateError) throw polUpdateError;
+}
+
+/**
+ * Salva um endosso extraído do Gemini.
+ * Busca a apólice base pelo policy_number. Se encontrada, aplica as alterações e
+ * salva o endosso com status "applied". Se não encontrada, salva como "pending".
+ *
+ * @param {Object} supabase         Cliente do Supabase (service role).
+ * @param {string} storagePath      Caminho do arquivo no Supabase Storage.
+ * @param {Object} extractedData    Dados extraídos pelo Gemini (document_type = "endorsement").
+ * @param {string} organizationId   UUID da organização.
+ * @param {string} fileHash         SHA-256 do arquivo PDF.
+ * @returns {Promise<{applied: boolean, pending: boolean, endorsementId: string}>}
+ */
+export async function saveEndorsementData(supabase, storagePath, extractedData, organizationId, fileHash) {
+  if (!organizationId) {
+    throw new Error("organizationId é obrigatório para salvar dados de endosso.");
+  }
+
+  const rawPolicyNumber = extractedData.policy_number || "";
+  const normalizedPolicyNumber = normalizePolicyNumber(rawPolicyNumber);
+
+  // 1. Buscar a apólice base pelo número normalizado na organização
+  const { data: policy, error: policySearchError } = await supabase
+    .from("policies")
+    .select("id, client_id")
+    .eq("organization_id", organizationId)
+    .maybeSingle()
+    .filter("policy_number", "ilike", normalizedPolicyNumber);
+
+  if (policySearchError) {
+    console.error("[Endosso] Erro ao buscar apólice base:", policySearchError.message);
+  }
+
+  const endorsementType = extractedData.endorsement_type || "other";
+  const issuedAt = extractedData.issued_at || null;
+  const changes = extractedData.changes || {};
+
+  if (policy) {
+    // ── APÓLICE ENCONTRADA ────────────────────────────────────
+    console.log(`[Endosso] Apólice base encontrada (ID: ${policy.id}). Aplicando endosso...`);
+
+    // Aplicar alterações nas tabelas de negócio
+    await applyEndorsementChanges(supabase, policy.id, endorsementType, changes, extractedData);
+
+    // Salvar registro do endosso
+    const { data: endorsement, error: insError } = await supabase
+      .from("endorsements")
+      .insert({
+        policy_id: policy.id,
+        organization_id: organizationId,
+        endorsement_number: extractedData.endorsement_number || null,
+        endorsement_type: endorsementType,
+        status: "applied",
+        issued_at: issuedAt,
+        expires_at: null,
+        storage_path: storagePath,
+        file_hash: fileHash,
+        raw_extracted_data: extractedData
+      })
+      .select("id")
+      .single();
+
+    if (insError) throw insError;
+
+    console.log(`[Endosso] Endosso ${extractedData.endorsement_number || "s/n"} aplicado com sucesso (ID: ${endorsement.id}).`);
+    return { applied: true, pending: false, endorsementId: endorsement.id };
+
+  } else {
+    // ── APÓLICE NÃO ENCONTRADA ────────────────────────────────
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    console.log(`[Endosso] Apólice base não encontrada para número "${rawPolicyNumber}". Salvando como pendente...`);
+
+    const { data: endorsement, error: insError } = await supabase
+      .from("endorsements")
+      .insert({
+        policy_id: null,
+        organization_id: organizationId,
+        endorsement_number: extractedData.endorsement_number || null,
+        endorsement_type: endorsementType,
+        status: "pending",
+        issued_at: issuedAt,
+        expires_at: expiresAt,
+        storage_path: storagePath,
+        file_hash: fileHash,
+        raw_extracted_data: extractedData
+      })
+      .select("id")
+      .single();
+
+    if (insError) throw insError;
+
+    console.log(`[Endosso] Endosso pendente criado (ID: ${endorsement.id}). Expira em: ${expiresAt}`);
+    return { applied: false, pending: true, endorsementId: endorsement.id };
+  }
+}
+
+/**
+ * Lista todos os endossos com status "pending" da organização,
+ * ordenados pelo prazo de expiração mais próximo.
+ *
+ * @param {Object} supabase       Cliente do Supabase (service role).
+ * @param {string} organizationId UUID da organização.
+ * @returns {Promise<Array>}      Lista de endossos pendentes com `days_remaining`.
+ */
+export async function getPendingEndorsements(supabase, organizationId) {
+  const { data, error } = await supabase
+    .from("endorsements")
+    .select("id, endorsement_number, endorsement_type, issued_at, expires_at, storage_path, raw_extracted_data, created_at")
+    .eq("organization_id", organizationId)
+    .eq("status", "pending")
+    .order("expires_at", { ascending: true });
+
+  if (error) throw error;
+
+  const now = Date.now();
+  return (data || []).map(e => ({
+    ...e,
+    days_remaining: e.expires_at
+      ? Math.max(0, Math.ceil((new Date(e.expires_at).getTime() - now) / (1000 * 60 * 60 * 24)))
+      : null
+  }));
+}
+
+/**
+ * Vincula manualmente um endosso pendente a uma apólice existente.
+ * Aplica as alterações do endosso e atualiza o status para "applied".
+ *
+ * @param {Object} supabase        Cliente do Supabase (service role).
+ * @param {string} endorsementId   UUID do endosso pendente.
+ * @param {string} policyId        UUID da apólice a vincular.
+ * @param {string} organizationId  UUID da organização (para validação de escopo).
+ */
+export async function linkEndorsementToPolicy(supabase, endorsementId, policyId, organizationId) {
+  // Verificar que o endosso pertence à org e está pendente
+  const { data: endorsement, error: endErr } = await supabase
+    .from("endorsements")
+    .select("id, endorsement_type, raw_extracted_data, organization_id, status")
+    .eq("id", endorsementId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (endErr || !endorsement) {
+    throw new Error("Endosso não encontrado na sua organização.");
+  }
+  if (endorsement.status !== "pending") {
+    throw new Error("Este endosso não está pendente e não pode ser vinculado manualmente.");
+  }
+
+  // Verificar que a apólice pertence à org
+  const { data: policy, error: polErr } = await supabase
+    .from("policies")
+    .select("id, organization_id")
+    .eq("id", policyId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (polErr || !policy) {
+    throw new Error("Apólice não encontrada na sua organização.");
+  }
+
+  // Aplicar as alterações do endosso
+  const changes = endorsement.raw_extracted_data?.changes || {};
+  await applyEndorsementChanges(supabase, policyId, endorsement.endorsement_type, changes, endorsement.raw_extracted_data);
+
+  // Atualizar o endosso para "applied"
+  const { error: updateErr } = await supabase
+    .from("endorsements")
+    .update({
+      policy_id: policyId,
+      status: "applied",
+      expires_at: null
+    })
+    .eq("id", endorsementId);
+
+  if (updateErr) throw updateErr;
+
+  console.log(`[Endosso] Endosso ${endorsementId} vinculado manualmente à apólice ${policyId}.`);
+}
+
+/**
+ * Remove endossos pendentes vencidos (expires_at < agora).
+ * Deleta o arquivo do Storage ANTES do registro no banco para evitar órfãos.
+ *
+ * @param {Object} supabase  Cliente do Supabase (service role).
+ * @param {Function} deleteFileFn  Função de deleção do Storage (deleteFileFromStorage).
+ */
+export async function runExpiredEndorsementsCleanup(supabase, deleteFileFn) {
+  try {
+    const { data: expired, error } = await supabase
+      .from("endorsements")
+      .select("id, storage_path, endorsement_number")
+      .eq("status", "pending")
+      .lt("expires_at", new Date().toISOString());
+
+    if (error) {
+      console.error("[Cleanup] Erro ao buscar endossos expirados:", error.message);
+      return;
+    }
+
+    if (!expired || expired.length === 0) {
+      console.log("[Cleanup] Nenhum endosso expirado encontrado.");
+      return;
+    }
+
+    console.log(`[Cleanup] ${expired.length} endosso(s) expirado(s) encontrado(s). Removendo...`);
+
+    for (const endorsement of expired) {
+      try {
+        // 1. Deletar arquivo do Storage PRIMEIRO (evita registro órfão se falhar depois)
+        if (endorsement.storage_path) {
+          await deleteFileFn(supabase, endorsement.storage_path);
+        }
+
+        // 2. Deletar registro do banco
+        const { error: delError } = await supabase
+          .from("endorsements")
+          .delete()
+          .eq("id", endorsement.id);
+
+        if (delError) {
+          console.error(`[Cleanup] Erro ao deletar endosso ${endorsement.id} do banco:`, delError.message);
+        } else {
+          console.log(`[Cleanup] Endosso ${endorsement.endorsement_number || endorsement.id} removido com sucesso.`);
+        }
+      } catch (itemErr) {
+        console.error(`[Cleanup] Erro ao processar endosso ${endorsement.id}:`, itemErr.message);
+        // Continua para o próximo item
+      }
+    }
+  } catch (err) {
+    console.error("[Cleanup] Erro inesperado no job de expiração:", err.message);
+  }
+}

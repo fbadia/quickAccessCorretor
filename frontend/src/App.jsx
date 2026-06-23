@@ -15,6 +15,7 @@ import {
   Clock,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   Sun,
   Moon,
   AlertTriangle,
@@ -63,6 +64,18 @@ export default function App() {
   const [usersList, setUsersList] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
+  
+  // Endorsement states
+  const [pendingEndorsements, setPendingEndorsements] = useState([]);
+  const [endorsementHistory, setEndorsementHistory] = useState([]);
+  const [endorsementHistoryOpen, setEndorsementHistoryOpen] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [uploadReport, setUploadReport] = useState(null); // { policies, applied, pending }
+  const [showUploadReport, setShowUploadReport] = useState(false);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkingEndorsement, setLinkingEndorsement] = useState(null);
+  const [linkPolicySearch, setLinkPolicySearch] = useState("");
+  const [linkLoading, setLinkLoading] = useState(false);
   
   // States para edição de usuários pelo Admin
   const [showEditUserModal, setShowEditUserModal] = useState(false);
@@ -213,6 +226,7 @@ export default function App() {
             )
           )
         `)
+        .eq("is_current", true)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -240,10 +254,45 @@ export default function App() {
         const users = await res.json();
         setUsersList(users || []);
       }
-
-      // 2. Buscar status da sincronização (limpo para S3)
     } catch (err) {
       console.error("Erro ao buscar dados de admin:", err.message);
+    }
+  };
+
+  // Buscar endossos pendentes da org (aba Pendências)
+  const fetchPendingEndorsements = async () => {
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const token = session?.access_token;
+      const res = await fetch(`${backendUrl}/api/endorsements/pending`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingEndorsements(data || []);
+      }
+    } catch (err) {
+      console.error("Erro ao buscar endossos pendentes:", err.message);
+    }
+  };
+
+  // Buscar histórico de endossos de uma apólice selecionada
+  const fetchEndorsementHistory = async (policyId) => {
+    if (!policyId) return;
+    setLoadingHistory(true);
+    try {
+      const { data, error } = await supabase
+        .from("endorsements")
+        .select("id, endorsement_number, endorsement_type, issued_at, storage_path")
+        .eq("policy_id", policyId)
+        .eq("status", "applied")
+        .order("issued_at", { ascending: false });
+      if (error) throw error;
+      setEndorsementHistory(data || []);
+    } catch (err) {
+      console.error("Erro ao buscar histórico de endossos:", err.message);
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -419,6 +468,8 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
     const token = session?.access_token;
 
+    const report = { policies: [], applied: [], pending: [] };
+
     for (let i = 0; i < selectedFiles.length; i++) {
       const current = selectedFiles[i];
       if (current.status === "success") continue;
@@ -435,32 +486,38 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
       try {
         const res = await fetch(`${backendUrl}/api/policies/upload`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`
-          },
+          headers: { Authorization: `Bearer ${token}` },
           body: formData
         });
 
         const data = await res.json().catch(() => ({}));
 
         if (res.ok) {
+          const docType = data.document_type || "policy";
+          let successMsg = "";
+
+          if (docType === "endorsement") {
+            if (data.applied) {
+              successMsg = `Endosso ${data.data?.endorsement_number || "s/n"} aplicado.`;
+              report.applied.push({ name: current.file.name, endorsementNumber: data.data?.endorsement_number, endorsementId: data.endorsementId });
+            } else {
+              successMsg = `Endosso ${data.data?.endorsement_number || "s/n"} pendente — apólice base não encontrada.`;
+              report.pending.push({ name: current.file.name, endorsementNumber: data.data?.endorsement_number, policyNumber: data.data?.policy_number, endorsementId: data.endorsementId });
+            }
+          } else {
+            successMsg = `Apólice ${data.data?.apolice?.numero || data.data?.policy_number || ""} processada.`;
+            report.policies.push({ name: current.file.name, policyNumber: data.data?.apolice?.numero || data.data?.policy_number });
+          }
+
           setSelectedFiles(prev => {
             const copy = [...prev];
-            copy[i] = { 
-              ...copy[i], 
-              status: "success", 
-              message: `Sucesso! Apólice ${data.data?.apolice?.numero || ""} processada.` 
-            };
+            copy[i] = { ...copy[i], status: data.alreadyExists ? "success" : "success", message: data.alreadyExists ? "Já processado anteriormente." : successMsg };
             return copy;
           });
         } else {
           setSelectedFiles(prev => {
             const copy = [...prev];
-            copy[i] = { 
-              ...copy[i], 
-              status: "error", 
-              message: data.error || "Erro ao processar PDF." 
-            };
+            copy[i] = { ...copy[i], status: "error", message: data.error || "Erro ao processar PDF." };
             return copy;
           });
         }
@@ -474,8 +531,16 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
 
     setUploading(false);
-    fetchData(); // Atualizar apólices na busca principal
-    showToast("Envio e extração de apólices finalizados!");
+    fetchData();
+    fetchPendingEndorsements();
+
+    // Mostrar relatório consolidado se houve algum resultado
+    if (report.policies.length > 0 || report.applied.length > 0 || report.pending.length > 0) {
+      setUploadReport(report);
+      setShowUploadReport(true);
+    } else {
+      showToast("Envio e extração finalizados!");
+    }
   };
 
   // Cadastrar novo Corretor (Admin cria registro de usuário no backend)
@@ -802,6 +867,24 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
             >
               Corretores
             </button>
+            <button
+              className={`tab-btn ${currentTab === "pending" ? "active" : ""}`}
+              onClick={() => { setCurrentTab("pending"); fetchPendingEndorsements(); }}
+              style={{ position: "relative" }}
+            >
+              Pendências
+              {pendingEndorsements.length > 0 && (
+                <span style={{
+                  position: "absolute",
+                  top: "6px",
+                  right: "6px",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: "#ef4444"
+                }} />
+              )}
+            </button>
           </div>
 
           {currentTab === "sync" && (
@@ -1116,9 +1199,89 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
               </div>
             </div>
           )}
+
+          {/* ABA: PENDÊNCIAS */}
+          {currentTab === "pending" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div className="admin-card">
+                <h3 className="section-title" style={{ margin: 0 }}>Endossos Pendentes</h3>
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "4px", marginBottom: "12px" }}>
+                  Endossos cujo número de apólice não foi encontrado no sistema. Vincule-os manualmente ou aguarde expiração automática (7 dias).
+                </p>
+
+                {pendingEndorsements.length === 0 ? (
+                  <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", textAlign: "center", padding: "24px 0" }}>
+                    ✅ Nenhum endosso pendente no momento.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {pendingEndorsements.map(e => {
+                      const typeLabels = {
+                        vehicle_change: "Troca de Veículo",
+                        insured_change: "Alteração de Segurado",
+                        coverage_change: "Alteração de Cobertura",
+                        other: "Outro"
+                      };
+                      const isUrgent = e.days_remaining !== null && e.days_remaining <= 2;
+                      return (
+                        <div key={e.id} style={{
+                          background: "var(--bg-primary)",
+                          border: `1px solid ${isUrgent ? "rgba(239,68,68,0.4)" : "var(--border-color)"}`,
+                          borderRadius: "10px",
+                          padding: "12px 14px",
+                          display: "flex",
+                          alignItems: "flex-start",
+                          justifyContent: "space-between",
+                          gap: "12px",
+                          flexWrap: "wrap"
+                        }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "4px", flex: 1, minWidth: "200px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                                {typeLabels[e.endorsement_type] || "Endosso"}
+                                {e.endorsement_number ? ` #${e.endorsement_number}` : ""}
+                              </span>
+                              <span style={{
+                                fontSize: "0.7rem",
+                                fontWeight: 600,
+                                padding: "2px 7px",
+                                borderRadius: "99px",
+                                background: isUrgent ? "rgba(239,68,68,0.15)" : "rgba(234,179,8,0.12)",
+                                color: isUrgent ? "#ef4444" : "#ca8a04",
+                                border: `1px solid ${isUrgent ? "rgba(239,68,68,0.3)" : "rgba(234,179,8,0.25)"}`,
+                                flexShrink: 0
+                              }}>
+                                {e.days_remaining !== null ? `${e.days_remaining}d restante${e.days_remaining !== 1 ? "s" : ""}` : "Expirando"}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                              Apólice no PDF: <strong>{e.raw_extracted_data?.policy_number || "—"}</strong>
+                            </span>
+                            <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                              Enviado em {new Date(e.created_at).toLocaleDateString("pt-BR")}
+                            </span>
+                          </div>
+                          <button
+                            className="secondary-btn"
+                            style={{ fontSize: "0.82rem", padding: "6px 14px", flexShrink: 0, marginTop: "2px" }}
+                            onClick={() => {
+                              setLinkingEndorsement(e);
+                              setLinkPolicySearch("");
+                              setShowLinkModal(true);
+                            }}
+                          >
+                            Vincular
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
-        /* VIEW BUSCA / CORRETOR */
         <div className={`main-content search-view-layout ${selectedVehicle ? "has-selected" : ""}`}>
           <div className="search-results-pane" style={{ display: "flex", flexDirection: "column", gap: "20px", width: "100%" }}>
             {/* SEARCH BAR */}
@@ -1317,11 +1480,278 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                     </button>
                   )}
                 </div>
+
+                {/* Histórico de Endossos — seção colapsável discreta */}
+                {selectedVehicle.policy?.id && (
+                  <div style={{ borderTop: "1px solid var(--border-color)", marginTop: "8px", paddingTop: "8px" }}>
+                    <button
+                      onClick={() => {
+                        const opening = !endorsementHistoryOpen;
+                        setEndorsementHistoryOpen(opening);
+                        if (opening && endorsementHistory.length === 0) {
+                          fetchEndorsementHistory(selectedVehicle.policy.id);
+                        }
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        fontSize: "0.78rem",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "4px 0",
+                        width: "100%"
+                      }}
+                    >
+                      <ChevronDown
+                        size={13}
+                        style={{
+                          transition: "transform 0.2s",
+                          transform: endorsementHistoryOpen ? "rotate(180deg)" : "rotate(0deg)"
+                        }}
+                      />
+                      Histórico de Endossos
+                      {endorsementHistory.length > 0 && (
+                        <span style={{ marginLeft: "4px", opacity: 0.7 }}>({endorsementHistory.length})</span>
+                      )}
+                    </button>
+
+                    {endorsementHistoryOpen && (
+                      <div style={{ marginTop: "6px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                        {loadingHistory ? (
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", padding: "4px 0" }}>Carregando...</span>
+                        ) : endorsementHistory.length === 0 ? (
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", padding: "4px 0" }}>Nenhum endosso aplicado.</span>
+                        ) : endorsementHistory.map(e => {
+                          const typeLabels = {
+                            vehicle_change: "Troca de Veículo",
+                            insured_change: "Alteração de Segurado",
+                            coverage_change: "Alteração de Cobertura",
+                            other: "Outro"
+                          };
+                          return (
+                            <div key={e.id} style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: "8px",
+                              padding: "4px 6px",
+                              borderRadius: "6px",
+                              background: "rgba(255,255,255,0.03)",
+                              fontSize: "0.75rem",
+                              color: "var(--text-secondary)"
+                            }}>
+                              <span>
+                                <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                                  {typeLabels[e.endorsement_type] || "Endosso"}
+                                </span>
+                                {e.endorsement_number ? ` #${e.endorsement_number}` : ""}
+                                {e.issued_at ? ` · ${new Date(e.issued_at).toLocaleDateString("pt-BR")}` : ""}
+                              </span>
+                              {e.storage_path && (
+                                <button
+                                  title="Ver PDF do endosso"
+                                  onClick={async () => {
+                                    try {
+                                      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                                      const token = session?.access_token;
+                                      const res = await fetch(`${backendUrl}/api/endorsements/${e.id}/download`, {
+                                        headers: { Authorization: `Bearer ${token}` }
+                                      });
+                                      if (!res.ok) throw new Error("Erro ao baixar PDF");
+                                      const blob = await res.blob();
+                                      const url = URL.createObjectURL(blob);
+                                      window.open(url, "_blank");
+                                    } catch (err) {
+                                      showToast("Erro ao abrir PDF do endosso", "error");
+                                    }
+                                  }}
+                                  style={{
+                                    background: "none",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    color: "var(--text-secondary)",
+                                    padding: "2px",
+                                    display: "flex",
+                                    alignItems: "center"
+                                  }}
+                                >
+                                  <FileText size={13} />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
       )}
+      {/* MODAL: RELATÓRIO DE IMPORTAÇÃO */}
+      {showUploadReport && uploadReport && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1000,
+          background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem"
+        }}>
+          <div style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "var(--border-radius-lg)",
+            padding: "1.5rem", width: "100%", maxWidth: "480px",
+            boxShadow: "var(--shadow-lg)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+              <h3 style={{ margin: 0, fontSize: "1.1rem" }}>Relatório de Importação</h3>
+              <button onClick={() => setShowUploadReport(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {uploadReport.policies.length > 0 && (
+                <div style={{ padding: "12px", borderRadius: "8px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                  <p style={{ margin: 0, fontWeight: 600, color: "#22c55e", marginBottom: "6px" }}>
+                    ✅ {uploadReport.policies.length} apólice{uploadReport.policies.length !== 1 ? "s" : ""} importada{uploadReport.policies.length !== 1 ? "s" : ""}
+                  </p>
+                  {uploadReport.policies.map((p, i) => (
+                    <p key={i} style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>• {p.policyNumber || p.name}</p>
+                  ))}
+                </div>
+              )}
+              {uploadReport.applied.length > 0 && (
+                <div style={{ padding: "12px", borderRadius: "8px", background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}>
+                  <p style={{ margin: 0, fontWeight: 600, color: "#818cf8", marginBottom: "6px" }}>
+                    🔄 {uploadReport.applied.length} endosso{uploadReport.applied.length !== 1 ? "s" : ""} aplicado{uploadReport.applied.length !== 1 ? "s" : ""}
+                  </p>
+                  {uploadReport.applied.map((e, i) => (
+                    <p key={i} style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>• Endosso {e.endorsementNumber || "s/n"}</p>
+                  ))}
+                </div>
+              )}
+              {uploadReport.pending.length > 0 && (
+                <div style={{ padding: "12px", borderRadius: "8px", background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.2)" }}>
+                  <p style={{ margin: 0, fontWeight: 600, color: "#ca8a04", marginBottom: "6px" }}>
+                    ⚠️ {uploadReport.pending.length} endosso{uploadReport.pending.length !== 1 ? "s" : ""} pendente{uploadReport.pending.length !== 1 ? "s" : ""} — apólice base não encontrada
+                  </p>
+                  {uploadReport.pending.map((e, i) => (
+                    <p key={i} style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                      • Endosso {e.endorsementNumber || "s/n"} (apólice: {e.policyNumber || "desconhecida"})
+                    </p>
+                  ))}
+                  <button
+                    style={{ marginTop: "8px", background: "none", border: "none", cursor: "pointer", color: "#ca8a04", fontSize: "0.82rem", padding: 0, textDecoration: "underline" }}
+                    onClick={() => { setShowUploadReport(false); setCurrentTab("pending"); fetchPendingEndorsements(); }}
+                  >
+                    Ir para Pendências →
+                  </button>
+                </div>
+              )}
+            </div>
+            <button className="primary-btn" style={{ width: "100%", marginTop: "1rem" }} onClick={() => setShowUploadReport(false)}>Fechar</button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: VINCULAR ENDOSSO A APÓLICE */}
+      {showLinkModal && linkingEndorsement && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1001,
+          background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem"
+        }}>
+          <div style={{
+            background: "var(--bg-secondary)", border: "1px solid var(--border-color)",
+            borderRadius: "var(--border-radius-lg)", padding: "1.5rem",
+            width: "100%", maxWidth: "480px", boxShadow: "var(--shadow-lg)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+              <h3 style={{ margin: 0, fontSize: "1.05rem" }}>Vincular Endosso a Apólice</h3>
+              <button onClick={() => setShowLinkModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+                <X size={20} />
+              </button>
+            </div>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "12px" }}>
+              Endosso: <strong>{linkingEndorsement.raw_extracted_data?.endorsement_number || "s/n"}</strong> — Apólice informada no PDF: <strong>{linkingEndorsement.raw_extracted_data?.policy_number || "—"}</strong>
+            </p>
+            <input
+              className="form-input"
+              type="text"
+              placeholder="Buscar por placa, nome ou número de apólice..."
+              value={linkPolicySearch}
+              onChange={e => setLinkPolicySearch(e.target.value)}
+              style={{ marginBottom: "10px" }}
+            />
+            <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" }}>
+              {vehicles
+                .filter(v => {
+                  const q = linkPolicySearch.toLowerCase();
+                  if (!q) return true;
+                  return (
+                    v.plate?.toLowerCase().includes(q) ||
+                    v.policy?.client?.name?.toLowerCase().includes(q) ||
+                    v.policy?.policy_number?.toLowerCase().includes(q)
+                  );
+                })
+                .slice(0, 20)
+                .map(v => (
+                  <button
+                    key={v.id}
+                    onClick={async () => {
+                      if (!v.policy?.id) return;
+                      setLinkLoading(true);
+                      try {
+                        const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                        const token = session?.access_token;
+                        const res = await fetch(`${backendUrl}/api/endorsements/${linkingEndorsement.id}/link`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ policy_id: v.policy.id })
+                        });
+                        if (!res.ok) {
+                          const err = await res.json();
+                          throw new Error(err.error || "Erro ao vincular.");
+                        }
+                        showToast("Endosso vinculado e aplicado com sucesso!");
+                        setShowLinkModal(false);
+                        fetchPendingEndorsements();
+                        fetchData();
+                      } catch (err) {
+                        showToast(err.message, "error");
+                      } finally {
+                        setLinkLoading(false);
+                      }
+                    }}
+                    disabled={linkLoading}
+                    style={{
+                      background: "var(--bg-primary)", border: "1px solid var(--border-color)",
+                      borderRadius: "8px", padding: "8px 12px", cursor: "pointer",
+                      textAlign: "left", opacity: linkLoading ? 0.6 : 1,
+                      display: "flex", flexDirection: "column", gap: "2px"
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, fontSize: "0.88rem" }}>{v.plate} — {v.policy?.client?.name}</span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Apólice: {v.policy?.policy_number}</span>
+                  </button>
+                ))
+              }
+              {vehicles.filter(v => {
+                const q = linkPolicySearch.toLowerCase();
+                if (!q) return true;
+                return (v.plate?.toLowerCase().includes(q) || v.policy?.client?.name?.toLowerCase().includes(q) || v.policy?.policy_number?.toLowerCase().includes(q));
+              }).length === 0 && (
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", textAlign: "center", padding: "12px 0" }}>Nenhuma apólice encontrada.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL DE EDIÇÃO DE USUÁRIO (PARA ADMIN DA ORG) */}
       {showEditUserModal && editingUser && (
         <div style={{
