@@ -3,9 +3,19 @@ import cors from "cors";
 import dotenv from "dotenv";
 import multer from "multer";
 import crypto from "crypto";
-import { extractPolicyData } from "./geminiService.js";
-import { getSupabaseClient, isFileProcessed, savePolicyData, seedInsurers, seedSuperAdmin } from "./dbService.js";
-import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage } from "./storageService.js";
+import { extractDocumentData } from "./geminiService.js";
+import {
+  getSupabaseClient,
+  isFileProcessed,
+  savePolicyData,
+  seedInsurers,
+  seedSuperAdmin,
+  saveEndorsementData,
+  getPendingEndorsements,
+  linkEndorsementToPolicy,
+  runExpiredEndorsementsCleanup
+} from "./dbService.js";
+import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage, deleteFileFromStorage } from "./storageService.js";
 
 dotenv.config();
 
@@ -35,6 +45,15 @@ let supabase;
 try {
   supabase = getSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
   seedSuperAdmin(supabase);
+
+  // Job de expiração de endossos pendentes:
+  // Roda imediatamente no boot e depois a cada 24h enquanto o servidor estiver ativo.
+  // Nota: no Render free tier o servidor pode hibernar; a limpeza roda ao acordar.
+  runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage);
+  setInterval(
+    () => runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage),
+    24 * 60 * 60 * 1000
+  );
 } catch (error) {
   console.error("Erro na inicialização:", error.message);
 }
@@ -685,7 +704,8 @@ app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, re
 // ─────────────────────────────────────────────────────────────
 
 /**
- * POST /api/policies/upload — Upload e processamento imediato de apólices em PDF
+ * POST /api/policies/upload — Upload e processamento imediato de apólices e endossos em PDF.
+ * O sistema detecta automaticamente o tipo de documento via Gemini e roteia adequadamente.
  */
 app.post("/api/policies/upload", authenticate, upload.single("file"), async (req, res) => {
   const orgId = req.profile.organization_id;
@@ -703,68 +723,186 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
   try {
     console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
 
-    // 1. Calcular o hash SHA-256 do arquivo em memória
+    // 1. Calcular hash SHA-256
     const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
 
-    // 2. Verificar se o hash já foi processado por esta organização
-    const { data: existingPolicy, error: findError } = await supabase
+    // 2. Verificar duplicata em apólices
+    const { data: existingPolicy, error: findPolicyError } = await supabase
       .from("policies")
       .select("id, raw_extracted_data")
       .eq("file_hash", fileHash)
       .eq("organization_id", orgId)
       .maybeSingle();
 
-    if (findError) {
-      console.error(`[Upload] Erro ao buscar hash da apólice:`, findError.message);
-    }
-
-    if (existingPolicy) {
-      console.log(`[Upload] Hash detectado. Evitando reprocessamento da apólice (ID: ${existingPolicy.id}) para org: ${orgId}`);
+    if (!findPolicyError && existingPolicy) {
+      console.log(`[Upload] Hash detectado em apólice existente (ID: ${existingPolicy.id}).`);
       return res.status(200).json({
         message: "Esta apólice já foi processada anteriormente.",
         alreadyExists: true,
+        document_type: "policy",
         policyId: existingPolicy.id,
         data: existingPolicy.raw_extracted_data
       });
     }
 
-    // 3. Fazer upload para o Supabase Storage (S3) no caminho "orgId/fileName"
+    // Verificar duplicata em endossos
+    const { data: existingEndorsement } = await supabase
+      .from("endorsements")
+      .select("id")
+      .eq("file_hash", fileHash)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+
+    if (existingEndorsement) {
+      console.log(`[Upload] Hash detectado em endosso existente (ID: ${existingEndorsement.id}).`);
+      return res.status(200).json({
+        message: "Este endosso já foi processado anteriormente.",
+        alreadyExists: true,
+        document_type: "endorsement",
+        endorsementId: existingEndorsement.id
+      });
+    }
+
+    // 3. Fazer upload para o Supabase Storage
     const storagePath = await uploadFileToStorage(supabase, orgId, fileName, file.buffer);
 
-    // 4. Extrair dados estruturados usando o Gemini API
-    const extractedData = await extractPolicyData(file.buffer, process.env.GEMINI_API_KEY);
+    // 4. Extrair dados via Gemini (detecta automaticamente o tipo)
+    const extractedData = await extractDocumentData(file.buffer, process.env.GEMINI_API_KEY);
 
-    // 5. Salvar informações extraídas na base de dados passando o fileHash
-    const result = await savePolicyData(supabase, storagePath, extractedData, orgId, fileHash);
+    let responsePayload;
 
-    // 6. Atualizar registro do último processamento da organização
-    await supabase
-      .from("organizations")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: "ok"
-      })
-      .eq("id", orgId);
+    if (extractedData.document_type === "endorsement") {
+      // ── ENDOSSO ────────────────────────────────────────────
+      console.log(`[Upload] Documento identificado como endosso. Processando...`);
+      const result = await saveEndorsementData(supabase, storagePath, extractedData, orgId, fileHash);
 
-    res.status(201).json({
-      message: `Arquivo ${fileName} processado com sucesso.`,
-      alreadyExists: false,
-      policyId: result.policyId,
-      data: extractedData
-    });
+      await supabase
+        .from("organizations")
+        .update({ last_sync_at: new Date().toISOString(), last_sync_status: "ok" })
+        .eq("id", orgId);
+
+      responsePayload = {
+        message: `Endosso ${extractedData.endorsement_number || "s/n"} processado${result.applied ? " e aplicado" : " — aguardando vínculo"}.`,
+        alreadyExists: false,
+        document_type: "endorsement",
+        endorsementId: result.endorsementId,
+        applied: result.applied,
+        pending: result.pending,
+        data: extractedData
+      };
+
+      return res.status(result.applied ? 201 : 202).json(responsePayload);
+
+    } else {
+      // ── APÓLICE ────────────────────────────────────────────
+      console.log(`[Upload] Documento identificado como apólice. Processando...`);
+      const result = await savePolicyData(supabase, storagePath, extractedData, orgId, fileHash);
+
+      await supabase
+        .from("organizations")
+        .update({ last_sync_at: new Date().toISOString(), last_sync_status: "ok" })
+        .eq("id", orgId);
+
+      responsePayload = {
+        message: `Arquivo ${fileName} processado com sucesso.`,
+        alreadyExists: false,
+        document_type: "policy",
+        policyId: result.policyId,
+        data: extractedData
+      };
+
+      return res.status(201).json(responsePayload);
+    }
+
   } catch (err) {
     console.error(`[Upload] Erro ao processar arquivo ${fileName}:`, err.message);
 
-    // Atualizar status de erro da org no banco
     await supabase
       .from("organizations")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: "error"
-      })
+      .update({ last_sync_at: new Date().toISOString(), last_sync_status: "error" })
       .eq("id", orgId);
 
     res.status(500).json({ error: `Erro ao processar ${fileName}: ${err.message}` });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// ROTAS DE ENDOSSOS
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/endorsements/pending — Lista endossos pendentes da org do usuário autenticado
+ */
+app.get("/api/endorsements/pending", authenticate, async (req, res) => {
+  const orgId = req.profile.organization_id;
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não tem acesso a dados de organizações." });
+  }
+  try {
+    const pending = await getPendingEndorsements(supabase, orgId);
+    res.json(pending);
+  } catch (err) {
+    console.error("Erro ao listar endossos pendentes:", err.message);
+    res.status(500).json({ error: "Erro ao listar endossos pendentes." });
+  }
+});
+
+/**
+ * PATCH /api/endorsements/:id/link — Vincula manualmente um endosso pendente a uma apólice
+ */
+app.patch("/api/endorsements/:id/link", authenticate, requireOrgAdmin, async (req, res) => {
+  const { id: endorsementId } = req.params;
+  const { policy_id: policyId } = req.body;
+  const orgId = req.profile.organization_id;
+
+  if (!policyId) {
+    return res.status(400).json({ error: "O campo 'policy_id' é obrigatório." });
+  }
+
+  try {
+    await linkEndorsementToPolicy(supabase, endorsementId, policyId, orgId);
+    res.json({ message: "Endosso vinculado e aplicado com sucesso." });
+  } catch (err) {
+    console.error("Erro ao vincular endosso:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/endorsements/:id/download — Proxy autenticado de PDF de endosso
+ */
+app.get("/api/endorsements/:id/download", authenticate, async (req, res) => {
+  try {
+    const { id: endorsementId } = req.params;
+    const orgId = req.profile.organization_id;
+
+    if (!orgId) {
+      return res.status(403).json({ error: "SuperAdmin não tem acesso a dados de organizações." });
+    }
+
+    const { data: endorsement, error: endorsementError } = await supabase
+      .from("endorsements")
+      .select("storage_path, endorsement_number, organization_id")
+      .eq("id", endorsementId)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+
+    if (endorsementError || !endorsement) return res.status(404).json({ error: "Endosso não encontrado." });
+    if (!endorsement.storage_path) return res.status(404).json({ error: "Endosso sem arquivo PDF associado." });
+
+    console.log(`[PDF Endosso] Usuário ${req.user.email} → baixando: ${endorsement.storage_path}`);
+    const pdfBuffer = await downloadFileFromStorage(supabase, endorsement.storage_path);
+    const safeFileName = `endosso-${endorsement.endorsement_number || endorsementId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${safeFileName}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.setHeader("Cache-Control", "private, no-store");
+
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("Erro ao baixar PDF de endosso:", err.message);
+    return res.status(500).json({ error: "Erro ao obter o arquivo PDF do endosso." });
   }
 });
 
