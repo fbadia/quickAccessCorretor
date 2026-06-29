@@ -505,6 +505,143 @@ app.get("/superadmin/users", authenticate, requireSuperAdmin, async (req, res) =
   }
 });
 
+/** GET /superadmin/organizations/:orgId/users — Usuários de uma org específica (para accordion) */
+app.get("/superadmin/organizations/:orgId/users", authenticate, requireSuperAdmin, async (req, res) => {
+  const { orgId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, email, name, role, is_active, created_at")
+      .eq("organization_id", orgId)
+      .neq("role", "superadmin")
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao listar usuários da organização." });
+  }
+});
+
+/** POST /superadmin/users — Cria usuário em qualquer organização */
+app.post("/superadmin/users", authenticate, requireSuperAdmin, async (req, res) => {
+  const { organization_id, name, email, password, role } = req.body;
+
+  if (!organization_id || !name?.trim() || !email?.trim() || !password || !role) {
+    return res.status(400).json({ error: "Campos obrigatórios: organization_id, name, email, password, role." });
+  }
+  if (!["admin", "broker"].includes(role)) {
+    return res.status(400).json({ error: "Role inválida. Use 'admin' ou 'broker'." });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: "A senha deve ter no mínimo 8 caracteres." });
+  }
+
+  try {
+    // 1. Verificar que a organização existe e está ativa
+    const { data: org, error: orgError } = await supabase
+      .from("organizations")
+      .select("id, status")
+      .eq("id", organization_id)
+      .maybeSingle();
+
+    if (orgError) throw orgError;
+    if (!org) return res.status(404).json({ error: "Organização não encontrada." });
+    if (org.status !== "active") return res.status(400).json({ error: "Organização não está ativa." });
+
+    // 2. Verificar limite de 5 usuários por org
+    const { count, error: countError } = await supabase
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization_id)
+      .neq("role", "superadmin");
+
+    if (countError) throw countError;
+    if (count >= 5) {
+      return res.status(409).json({
+        error: "Limite de 5 usuários atingido para esta organização.",
+        current: count,
+        limit: 5
+      });
+    }
+
+    // 3. Criar usuário no Auth
+    const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+      email: email.trim(),
+      password,
+      email_confirm: true,
+      user_metadata: { name: name.trim(), role }
+    });
+
+    if (createError) {
+      if (createError.message?.includes("already registered")) {
+        return res.status(409).json({ error: "Este e-mail já está em uso." });
+      }
+      return res.status(400).json({ error: createError.message });
+    }
+
+    // 4. Vincular à organização no profiles
+    const { error: profError } = await supabase
+      .from("profiles")
+      .upsert({
+        id: newUser.user.id,
+        email: email.trim(),
+        name: name.trim(),
+        role,
+        organization_id,
+        is_active: true
+      });
+
+    if (profError) {
+      // Rollback: deletar o usuário do Auth se o profile falhou
+      await supabase.auth.admin.deleteUser(newUser.user.id);
+      throw profError;
+    }
+
+    console.log(`[SuperAdmin] Usuário ${email} criado na org ${organization_id} com role ${role}.`);
+    res.status(201).json({
+      message: "Usuário criado com sucesso.",
+      user: { id: newUser.user.id, email: email.trim(), name: name.trim(), role }
+    });
+  } catch (err) {
+    console.error("Erro ao criar usuário via superadmin:", err.message);
+    res.status(500).json({ error: "Erro interno ao criar usuário." });
+  }
+});
+
+/** PATCH /superadmin/users/:userId/password — Redefine a senha de qualquer usuário */
+app.patch("/superadmin/users/:userId/password", authenticate, requireSuperAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { password } = req.body;
+
+  if (!password || password.length < 8) {
+    return res.status(400).json({ error: "A senha deve ter no mínimo 8 caracteres." });
+  }
+
+  try {
+    // Garantir que não é um superadmin
+    const { data: target, error: checkError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (checkError) throw checkError;
+    if (!target) return res.status(404).json({ error: "Usuário não encontrado." });
+    if (target.role === "superadmin") {
+      return res.status(403).json({ error: "Não é possível redefinir a senha de um superadmin por este fluxo." });
+    }
+
+    const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password });
+    if (authError) return res.status(400).json({ error: authError.message });
+
+    res.json({ message: "Senha redefinida com sucesso." });
+  } catch (err) {
+    console.error("Erro ao redefinir senha:", err.message);
+    res.status(500).json({ error: "Erro interno ao redefinir senha." });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 // ROTAS ADMIN DE ORG (/admin/*)
 // ─────────────────────────────────────────────────────────────
