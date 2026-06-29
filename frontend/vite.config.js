@@ -11,8 +11,8 @@ export default defineConfig({
       injectRegister: 'auto',
       includeAssets: ['favicon.svg', 'favicon.ico', '*.png'],
       manifest: {
-        name: 'QuickAccess Corretor',
-        short_name: 'QuickAccess',
+        name: 'SeguroNaMão',
+        short_name: 'SeguroNaMão',
         description: 'Acesso rápido a apólices e contatos de seguradoras para corretores de seguros automotivos.',
         theme_color: '#863bff',
         background_color: '#0f0f1a',

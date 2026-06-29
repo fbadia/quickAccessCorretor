@@ -1,6 +1,6 @@
-# QuickAccessCorretor
+# SeguroNaMão
 
-QuickAccessCorretor é um MVP mobile-first criado para corretores de seguros automotivos localizarem rapidamente os dados de segurados, suas apólices e contatos de assistência das seguradoras, mesmo estando fora do escritório.
+SeguroNaMão é um MVP mobile-first criado para corretores de seguros automotivos localizarem rapidamente os dados de segurados, suas apólices e contatos de assistência das seguradoras, mesmo estando fora do escritório.
 
 O projeto utiliza um monitor automático de arquivos no Google Drive que lê apólices em formato PDF (de seguradoras como Yelum, Porto Seguro, Bradesco, HDI e Allianz), extrai os dados estruturados usando a API do Gemini 1.5 Flash, e os armazena no Supabase.
 

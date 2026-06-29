@@ -1,7 +1,7 @@
 {
-  "name": "quickaccesscorretor-backend",
+  "name": "seguronamao-backend",
   "version": "1.0.0",
-  "description": "Backend for QuickAccessCorretor - processes PDFs from Google Drive and manages data",
+  "description": "Backend do SeguroNaMão - processa PDFs de apólices e gerencia dados multi-tenant",
   "main": "index.js",
   "type": "module",
   "scripts": {
