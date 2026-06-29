@@ -713,7 +713,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         <header>
           <div className="logo-container">
             <Shield className="logo-icon" size={24} />
-            <span className="logo-text">QuickAccess</span>
+            <span className="logo-text">SeguroNaMão</span>
           </div>
           <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
@@ -807,7 +807,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
         <div className="logo-container" onClick={() => setIsAdminView(false)} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}>
           <Zap className="logo-icon" size={24} />
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <span className="logo-text">QuickAccess</span>
+            <span className="logo-text">SeguroNaMão</span>
             {profile?.organization?.name && (
               <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 500, marginTop: "-2px" }}>
                 {profile.organization.name}

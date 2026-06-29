@@ -1,4 +1,4 @@
-# Configuração de Ambientes — QuickAccessCorretor
+# Configuração de Ambientes — SeguroNaMão
 
 Este documento descreve a estratégia de branches e a configuração de cada ambiente.
 
@@ -53,7 +53,7 @@ feature/xyz ──PR──▶ develop ──PR──▶ main
 
 ### 1. Supabase (Banco de Dados Dev)
 
-- [ ] Criar novo projeto em [supabase.com](https://supabase.com): `quickaccess-dev`
+- [ ] Criar novo projeto em [supabase.com](https://supabase.com): `seguronamao-dev`
 - [ ] No SQL Editor, executar `supabase/schema.sql`
 - [ ] Executar todas as migrations em ordem:
   - [ ] `supabase/migrations/20260619_add_endorsements.sql`
@@ -76,7 +76,7 @@ feature/xyz ──PR──▶ develop ──PR──▶ main
   GEMINI_API_KEY            = sua_chave
   PORT                      = 3001
   ```
-- [ ] Anotar a URL do serviço dev: `https://quickaccess-dev.onrender.com`
+- [ ] Anotar a URL do serviço dev: `https://seguronamao-dev.onrender.com`
 
 ### 3. Vercel (Frontend Dev)
 
@@ -86,13 +86,13 @@ feature/xyz ──PR──▶ develop ──PR──▶ main
   ```
   VITE_SUPABASE_URL      = https://xxx-dev.supabase.co
   VITE_SUPABASE_ANON_KEY = anon_key_dev
-  VITE_BACKEND_URL       = https://quickaccess-dev.onrender.com
+  VITE_BACKEND_URL       = https://seguronamao-dev.onrender.com
   ```
 - [ ] Confirmar que as variáveis de **Production** continuam apontando para prod:
   ```
   VITE_SUPABASE_URL      = https://xxx-prod.supabase.co
   VITE_SUPABASE_ANON_KEY = anon_key_prod
-  VITE_BACKEND_URL       = https://quickaccess-prod.onrender.com
+  VITE_BACKEND_URL       = https://seguronamao-prod.onrender.com
   ```
 
 ### 4. Variáveis locais (desenvolvimento local)

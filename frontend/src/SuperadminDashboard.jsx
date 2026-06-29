@@ -457,7 +457,7 @@ export default function SuperadminDashboard({ session, profile, onLogout, theme,
                 background: "linear-gradient(135deg, var(--text-primary) 30%, #863bff 100%)",
                 WebkitBackgroundClip: "text",
                 WebkitTextFillColor: "transparent"
-              }}>QuickAccess</span>
+              }}>SeguroNaMão</span>
               <span style={{
                 fontSize: "0.7rem",
                 background: "linear-gradient(135deg, #863bff, #6a2dd4)",
