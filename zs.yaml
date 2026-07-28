@@ -1,22 +1,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # zs.yaml — Orquestrador ZeroServer Community Cloud
 # Lido pelo CLI `zs deploy` para subir a aplicação SeguroNaMão.
+# Referência oficial: https://github.com/zeroserver-cc/demo-apps/blob/main/docs/zs-yaml-reference.md
 #
 # IMPORTANTE: Nunca coloque credenciais reais neste arquivo.
-# Configure as variáveis sensíveis pelo portal do ZeroServer ou via:
-#   zs deploy --env SUPABASE_SERVICE_ROLE_KEY=valor
+# Configure as variáveis sensíveis pelo portal do ZeroServer.
 # ─────────────────────────────────────────────────────────────────────────────
 
 app: seguronamao
 
+# Preferência geográfica: nós brasileiros (LGPD + menor latência)
+placement:
+  country: br
+
 services:
   # ── Backend: Node.js + Express ──────────────────────────────────────────────
   - name: backend
-    # Imagem publicada no GitHub Container Registry via CI/CD (deploy.yml)
     image: ghcr.io/fbadia/seguronamao-backend:latest
-    ports: ["3001"]
-    # Não exposto publicamente — acessado internamente pelo Nginx (frontend)
-    # via http://backend:3001 dentro da rede do ZeroServer
+    # ports não declarados — backend é interno, não recebe tráfego externo.
+    # Serviços da mesma app se enxergam por nome: http://backend:3001
     env:
       # Supabase — preencher via portal ZeroServer, não aqui
       - SUPABASE_URL=__SUBSTITUIR__
@@ -30,13 +32,14 @@ services:
       - PORT=3001
       - NODE_ENV=production
 
-  # ── Frontend: React + Vite buildado, servido via Nginx ────────────────────────
+  # ── Frontend: Nginx (serve SPA + proxy reverso para o backend) ────────────
   - name: frontend
     image: ghcr.io/fbadia/seguronamao-frontend:latest
     ports: ["80"]
     dependsOn: [backend]
-    # ┌─ Único ponto de entrada externo ─────────────────────────────────────
-    # │ Browser → /api/*  → Nginx proxy → backend:3001 (interno)
-    # │ Browser → /*      → Nginx serve index.html (React SPA)
-    # └──────────────────────────────────────────────────
+    # ┌─ Único ponto de entrada externo (exposed: true = URL pública HTTPS) ──
+    # │ Browser → /api/*, /admin/*, /superadmin/*, /health
+    # │         → Nginx proxy → backend:3001 (rede interna)
+    # │ Browser → /* → Nginx serve index.html (React SPA)
+    # └───────────────────────────────────────────────────────────────────────
     exposed: true
