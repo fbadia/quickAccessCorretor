@@ -13,9 +13,10 @@ services:
   # ── Backend: Node.js + Express ──────────────────────────────────────────────
   - name: backend
     # Imagem publicada no GitHub Container Registry via CI/CD (deploy.yml)
-    # Substitua SEU_USUARIO pelo seu username do GitHub
     image: ghcr.io/fbadia/seguronamao-backend:latest
     ports: ["3001"]
+    # Não exposto publicamente — acessado internamente pelo Nginx (frontend)
+    # via http://backend:3001 dentro da rede do ZeroServer
     env:
       # Supabase — preencher via portal ZeroServer, não aqui
       - SUPABASE_URL=__SUBSTITUIR__
@@ -29,11 +30,13 @@ services:
       - PORT=3001
       - NODE_ENV=production
 
-  # ── Frontend: React + Vite buildado, servido via Nginx ──────────────────────
+  # ── Frontend: React + Vite buildado, servido via Nginx ────────────────────────
   - name: frontend
-    # Imagem publicada no GitHub Container Registry via CI/CD (deploy.yml)
     image: ghcr.io/fbadia/seguronamao-frontend:latest
     ports: ["80"]
     dependsOn: [backend]
-    # exposed: true → este serviço recebe a URL pública HTTPS da ZeroServer
+    # ┌─ Único ponto de entrada externo ─────────────────────────────────────
+    # │ Browser → /api/*  → Nginx proxy → backend:3001 (interno)
+    # │ Browser → /*      → Nginx serve index.html (React SPA)
+    # └──────────────────────────────────────────────────
     exposed: true

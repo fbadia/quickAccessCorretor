@@ -9,10 +9,11 @@ on:
 #
 #   VITE_SUPABASE_URL        URL do Supabase (prod ou dev conforme branch)
 #   VITE_SUPABASE_ANON_KEY   Anon key do Supabase
-#   VITE_BACKEND_URL_PROD    URL pública do backend no ZeroServer (prod)
-#   VITE_BACKEND_URL_DEV     URL pública do backend no ZeroServer (dev)
 #   ZS_TOKEN                 Token do ZeroServer (conta de produção)
 #   ZS_TOKEN_DEV             Token do ZeroServer (conta/ambiente de dev)
+#
+# Nota: VITE_BACKEND_URL não é um secret — em produção é string vazia.
+# O Nginx faz proxy de /api/* e /admin/* para o backend internamente.
 # ─────────────────────────────────────────────────────────────────────────────
 
 env:
@@ -41,17 +42,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 3. Definir tag e variáveis por ambiente ───────────────────────────────
+      # ── 3. Definir tag e variáveis por ambiente ─────────────────────────────────
       - name: Definir variáveis de ambiente
         run: |
           if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "TAG=latest"                                    >> $GITHUB_ENV
-            echo "VITE_BACKEND_URL=${{ secrets.VITE_BACKEND_URL_PROD }}" >> $GITHUB_ENV
-            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN }}"             >> $GITHUB_ENV
+            echo "TAG=latest"                        >> $GITHUB_ENV
+            # Em prod: VITE_BACKEND_URL vazio — Nginx faz proxy internamente
+            echo "VITE_BACKEND_URL="                  >> $GITHUB_ENV
+            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN }}"  >> $GITHUB_ENV
           else
-            echo "TAG=develop"                                   >> $GITHUB_ENV
-            echo "VITE_BACKEND_URL=${{ secrets.VITE_BACKEND_URL_DEV }}" >> $GITHUB_ENV
-            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN_DEV }}"         >> $GITHUB_ENV
+            echo "TAG=develop"                        >> $GITHUB_ENV
+            # Em dev local: continua apontando para localhost
+            echo "VITE_BACKEND_URL=http://localhost:3001" >> $GITHUB_ENV
+            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN_DEV }}" >> $GITHUB_ENV
           fi
           # SHA curto para tag imutável (facilita rollback)
           echo "SHA_TAG=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
