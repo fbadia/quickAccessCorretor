@@ -1,0 +1,19 @@
+# Dependências — nunca entram na imagem
+node_modules
+
+# Build output — gerado no estágio builder, não precisa do source
+dist
+
+# Credenciais — nunca entram na imagem
+.env
+.env.*
+!.env.example
+
+# Git e logs
+.git
+.gitignore
+*.log
+npm-debug.log*
+
+# Arquivos de desenvolvimento
+README.md

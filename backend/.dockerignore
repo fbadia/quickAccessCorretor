@@ -1,0 +1,18 @@
+# Dependências — nunca entram na imagem
+node_modules
+
+# Credenciais — nunca entram na imagem
+.env
+.env.*
+!.env.example
+
+# Git e logs
+.git
+.gitignore
+*.log
+npm-debug.log*
+
+# Arquivos de desenvolvimento/teste
+README.md
+testParser.js
+data.json

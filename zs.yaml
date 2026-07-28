@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# zs.yaml — Orquestrador ZeroServer Community Cloud
+# Lido pelo CLI `zs deploy` para subir a aplicação SeguroNaMão.
+#
+# IMPORTANTE: Nunca coloque credenciais reais neste arquivo.
+# Configure as variáveis sensíveis pelo portal do ZeroServer ou via:
+#   zs deploy --env SUPABASE_SERVICE_ROLE_KEY=valor
+# ─────────────────────────────────────────────────────────────────────────────
+
+app: seguronamao
+
+services:
+  # ── Backend: Node.js + Express ──────────────────────────────────────────────
+  - name: backend
+    # Imagem publicada no GitHub Container Registry via CI/CD (deploy.yml)
+    # Substitua SEU_USUARIO pelo seu username do GitHub
+    image: ghcr.io/SEU_USUARIO/seguronamao-backend:latest
+    ports: ["3001"]
+    env:
+      # Supabase — preencher via portal ZeroServer, não aqui
+      - SUPABASE_URL=__SUBSTITUIR__
+      - SUPABASE_SERVICE_ROLE_KEY=__SUBSTITUIR__
+      # Google Gemini AI
+      - GEMINI_API_KEY=__SUBSTITUIR__
+      # Google Drive (opcional — remover se não usar sync via Drive)
+      - GOOGLE_DRIVE_FOLDER_ID=__SUBSTITUIR__
+      - GOOGLE_SERVICE_ACCOUNT_JSON=__SUBSTITUIR__
+      # Servidor
+      - PORT=3001
+      - NODE_ENV=production
+
+  # ── Frontend: React + Vite buildado, servido via Nginx ──────────────────────
+  - name: frontend
+    # Imagem publicada no GitHub Container Registry via CI/CD (deploy.yml)
+    image: ghcr.io/SEU_USUARIO/seguronamao-frontend:latest
+    ports: ["80"]
+    dependsOn: [backend]
+    # exposed: true → este serviço recebe a URL pública HTTPS da ZeroServer
+    exposed: true

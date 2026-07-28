@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — Ambiente de Desenvolvimento Local
+#
+# Sobe backend + frontend com hot-reload em um único comando:
+#   docker compose up --build
+#
+# Pré-requisitos:
+#   - Docker Desktop instalado
+#   - backend/.env preenchido (copiar de backend/.env.example)
+#   - frontend/.env preenchido (copiar de frontend/.env.example)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── Backend: Node.js + Express (porta 3001) ────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      target: dev          # usa o estágio dev com nodemon (hot-reload)
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./backend/.env     # carrega variáveis do .env local
+    volumes:
+      - ./backend:/app     # mapeia código local → hot-reload funciona
+      - /app/node_modules  # preserva node_modules do container (evita conflito)
+    restart: unless-stopped
+
+  # ── Frontend: Vite dev server (porta 5173) ─────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: dev          # usa o estágio dev com Vite
+    ports:
+      - "5173:5173"
+    env_file:
+      - ./frontend/.env    # carrega VITE_* do .env local
+    volumes:
+      - ./frontend:/app    # mapeia código local → hot-reload funciona
+      - /app/node_modules  # preserva node_modules do container
+    depends_on:
+      - backend            # aguarda o backend estar pronto antes de subir
+    restart: unless-stopped

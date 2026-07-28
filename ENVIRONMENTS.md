@@ -31,21 +31,33 @@ feature/xyz ──PR──▶ develop ──PR──▶ main
 
 ## Ambientes
 
-### Produção (`main`)
+> **Migração em andamento:** o projeto está sendo migrado para o [ZeroServer Community Cloud](https://zeroserver.cc).
+> Vercel + Render permanecem no ar durante a janela de validação. Ver seção **Rollback** abaixo.
 
-| Serviço | Configuração |
-|---------|-------------|
-| **Frontend** | Vercel — auto-deploy em push para `main` |
-| **Backend** | Render — deploy manual ou auto em push para `main` |
-| **Banco** | Supabase projeto de **produção** |
+### Produção (`main`) — Destino: ZeroServer
 
-### Desenvolvimento (`develop`)
+| Serviço | Plataforma atual | Plataforma destino |
+|---------|-----------------|-------------------|
+| **Frontend** | Vercel (auto-deploy) | ZeroServer (imagem Nginx via GHCR) |
+| **Backend** | Render | ZeroServer (imagem Node.js via GHCR) |
+| **Banco** | Supabase produção | Supabase produção (não muda) |
 
-| Serviço | Configuração |
-|---------|-------------|
-| **Frontend** | Vercel — preview automático da branch `develop` |
-| **Backend** | Render — segundo serviço apontando para branch `develop` |
-| **Banco** | Supabase projeto de **desenvolvimento** (dados de teste) |
+### Desenvolvimento (`develop`) — Destino: ZeroServer
+
+| Serviço | Plataforma atual | Plataforma destino |
+|---------|-----------------|-------------------|
+| **Frontend** | Vercel preview | ZeroServer (imagem Nginx, tag `develop`) |
+| **Backend** | Render dev | ZeroServer (imagem Node.js, tag `develop`) |
+| **Banco** | Supabase dev | Supabase dev (não muda) |
+
+### Local (todos os devs)
+
+```bash
+# Sobe backend (porta 3001) + frontend (porta 5173) com hot-reload
+docker compose up --build
+```
+
+Pré-requisitos: Docker Desktop + `backend/.env` + `frontend/.env` preenchidos.
 
 ---
 
@@ -168,3 +180,50 @@ git push origin develop
 Ordem de execução em um banco novo:
 1. `supabase/schema.sql` (schema base)
 2. `supabase/migrations/*.sql` (em ordem cronológica pelo nome do arquivo)
+
+---
+
+## Rollback da Migração ZeroServer
+
+Ponto de restauração criado antes da migração: tag `v-pre-zeroserver`.
+
+### Nível 1 — Rollback de tráfego (< 5 min, sem código)
+
+```bash
+# Redirecionar frontend de volta para Render no Vercel
+vercel env rm VITE_BACKEND_URL production
+vercel env add VITE_BACKEND_URL production   # inserir URL do Render
+vercel --prod --force
+```
+
+### Nível 2 — Rollback de imagem no ZeroServer (3–5 min)
+
+```bash
+# Re-deploy da imagem anterior pelo SHA
+zs deploy ghcr.io/SEU_USUARIO/seguronamao-backend:SHA_ANTERIOR --name backend
+zs deploy ghcr.io/SEU_USUARIO/seguronamao-frontend:SHA_ANTERIOR --name frontend
+zs list
+```
+
+### Nível 3 — Rollback completo de código
+
+```bash
+# Restaurar repositório ao estado pré-migração
+git checkout v-pre-zeroserver
+git checkout -b fix/revert-zeroserver
+git push origin fix/revert-zeroserver
+# Abrir PR: fix/revert-zeroserver → main
+```
+
+### Declaração de Go/No-Go
+
+Só descomissionar Vercel + Render após **todos** os itens abaixo confirmados:
+
+- [ ] `docker compose up` funciona localmente
+- [ ] ZeroServer: `zs list` mostra status RUNNING
+- [ ] HTTPS da URL pública abre no browser
+- [ ] Login Magic Link funciona
+- [ ] Listagem de apólices carrega
+- [ ] Upload PDF extrai dados corretamente
+- [ ] Isolamento multi-tenant validado
+- [ ] 24h de uptime estável (`zs logs` sem erros)

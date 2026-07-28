@@ -1,0 +1,106 @@
+name: Build & Deploy → ZeroServer
+
+on:
+  push:
+    branches: [main, develop]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets necessários no GitHub (Settings → Secrets → Actions):
+#
+#   VITE_SUPABASE_URL        URL do Supabase (prod ou dev conforme branch)
+#   VITE_SUPABASE_ANON_KEY   Anon key do Supabase
+#   VITE_BACKEND_URL_PROD    URL pública do backend no ZeroServer (prod)
+#   VITE_BACKEND_URL_DEV     URL pública do backend no ZeroServer (dev)
+#   ZS_TOKEN                 Token do ZeroServer (conta de produção)
+#   ZS_TOKEN_DEV             Token do ZeroServer (conta/ambiente de dev)
+# ─────────────────────────────────────────────────────────────────────────────
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/seguronamao-backend
+  FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/seguronamao-frontend
+
+jobs:
+  build-and-deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # necessário para push no GHCR
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      # ── 2. Login no GitHub Container Registry ────────────────────────────────
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 3. Definir tag e variáveis por ambiente ───────────────────────────────
+      - name: Definir variáveis de ambiente
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "TAG=latest"                                    >> $GITHUB_ENV
+            echo "VITE_BACKEND_URL=${{ secrets.VITE_BACKEND_URL_PROD }}" >> $GITHUB_ENV
+            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN }}"             >> $GITHUB_ENV
+          else
+            echo "TAG=develop"                                   >> $GITHUB_ENV
+            echo "VITE_BACKEND_URL=${{ secrets.VITE_BACKEND_URL_DEV }}" >> $GITHUB_ENV
+            echo "ZS_TOKEN=${{ secrets.ZS_TOKEN_DEV }}"         >> $GITHUB_ENV
+          fi
+          # SHA curto para tag imutável (facilita rollback)
+          echo "SHA_TAG=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
+      # ── 4. Build & Push: Backend ─────────────────────────────────────────────
+      - name: Build & Push imagem do backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          target: production
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ env.TAG }}
+            ${{ env.BACKEND_IMAGE }}:${{ env.SHA_TAG }}
+
+      # ── 5. Build & Push: Frontend ────────────────────────────────────────────
+      # As variáveis VITE_* são build-args: ficam embutidas no bundle JS pelo Vite
+      - name: Build & Push imagem do frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          target: production
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ env.TAG }}
+            ${{ env.FRONTEND_IMAGE }}:${{ env.SHA_TAG }}
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_BACKEND_URL=${{ env.VITE_BACKEND_URL }}
+
+      # ── 6. Instalar CLI do ZeroServer ────────────────────────────────────────
+      - name: Instalar zs CLI
+        run: curl -fsSL https://raw.githubusercontent.com/zeroserver-cc/zsc-cli/main/install.sh | sh
+
+      # ── 7. Deploy no ZeroServer ──────────────────────────────────────────────
+      # O CLI lê o zs.yaml na raiz do repositório.
+      # As variáveis sensíveis (SUPABASE_SERVICE_ROLE_KEY etc.) são configuradas
+      # no portal do ZeroServer — não passadas aqui para evitar exposição em logs.
+      - name: Deploy no ZeroServer
+        env:
+          ZS_TOKEN: ${{ env.ZS_TOKEN }}
+        run: zs deploy
+
+      # ── 8. Verificação pós-deploy ────────────────────────────────────────────
+      - name: Listar apps e confirmar status RUNNING
+        env:
+          ZS_TOKEN: ${{ env.ZS_TOKEN }}
+        run: |
+          echo "Aguardando inicialização..."
+          sleep 15
+          zs list
