@@ -382,7 +382,13 @@ fix/*     → Hotfixes (PR para main + backmerge para develop)
 
 **Nunca** commitar diretamente em `main`.
 
+> 📄 **Referência completa:** consulte [`ENVIRONMENTS.md`](./ENVIRONMENTS.md) para a estratégia
+> detalhada de branches, fluxo de trabalho (`feature → develop → main`), checklist de
+> configuração de ambientes (Supabase dev/prod, ZeroServer) e procedimentos de rollback
+> da migração ZeroServer.
+
 ---
+
 
 ## 10. Rollback
 
