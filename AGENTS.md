@@ -413,6 +413,46 @@ git push origin fix/revert-zeroserver
 
 ---
 
+## 10. Documentação
+
+Toda a documentação do projeto vive em `docs/`. Todos os arquivos são `.md`.
+
+### Estrutura
+
+```
+docs/
+├── README.md              # Índice central com links para todos os documentos
+├── arquitetura.md         # Visão técnica completa (containers, fluxos, decisões)
+├── api.md                 # Referência de todas as rotas, payloads e exemplos
+│
+├── ADRs/                  # Architecture Decision Records
+│   ├── ADR-001-supabase-backend-auth.md
+│   ├── ADR-002-separacao-frontend-backend-containers.md
+│   ├── ADR-003-gemini-extracao-pdfs.md
+│   ├── ADR-004-migracao-zeroserver.md
+│   ├── ADR-005-nginx-proxy-reverso.md
+│   └── ADR-006-rls-multitenancy.md
+│
+└── Gestao/                # Documentação de gestão do produto
+    ├── roadmap.md         # Visão de produto, épicos e entregas
+    └── sprints/
+        └── sprint-0.md   # Infra, containerização e deploy ZeroServer
+```
+
+### Convenções
+
+- **ADRs:** `docs/ADRs/ADR-{NNN}-{titulo-em-kebab-case}.md`
+  - Número sequencial de 3 dígitos: `ADR-007-...`
+  - Campos obrigatórios: Data, Status, Contexto, Decisão, Alternativas Consideradas, Consequências
+  - Status: `Proposta` → `Aceita` | `Rejeitada` | `Depreciada`
+
+- **Sprints:** `docs/Gestao/sprints/sprint-{N}.md`
+  - Campos obrigatórios: Período, Objetivo, Critérios de Aceite, Tarefas, Retrospectiva
+
+- **Geral:** qualquer novo documento técnico vai em `docs/{nome}.md`
+
+---
+
 ## 11. Agents e Skills Disponíveis
 
 O projeto usa o framework de agentes localizado em `.agent/`:
