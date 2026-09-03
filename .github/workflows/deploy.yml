@@ -108,6 +108,18 @@ jobs:
           if [ -n "$GEMINI_API_KEY" ]; then
             sed -i "s|GEMINI_API_KEY=__SUBSTITUIR__|GEMINI_API_KEY=$GEMINI_API_KEY|g" zs.yaml
           fi
+
+          # Autenticar no ZeroServer via token/API key
+          if [ -z "$ZS_TOKEN" ]; then
+            echo "::error::ZS_TOKEN ou ZS_TOKEN_DEV não foi encontrado nos Secrets do GitHub!"
+            exit 1
+          fi
+
+          if [[ "$ZS_TOKEN" == zsk_* ]]; then
+            echo "$ZS_TOKEN" | zs login --api-key --token-stdin
+          else
+            zs login --token "$ZS_TOKEN"
+          fi
           
           zs deploy
 
