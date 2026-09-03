@@ -20,8 +20,7 @@ services:
     # ports não declarados — backend é interno, não recebe tráfego externo.
     # Serviços da mesma app se enxergam por nome: http://backend:3001
     env:
-      # Supabase — preencher via portal ZeroServer, não aqui
-      - SUPABASE_URL=__SUBSTITUIR__
+      - SUPABASE_URL=https://qmmshawbcwmvqtxjtkxy.supabase.co
       - SUPABASE_SERVICE_ROLE_KEY=__SUBSTITUIR__
       # Google Gemini AI
       - GEMINI_API_KEY=__SUBSTITUIR__
@@ -37,6 +36,9 @@ services:
     image: ghcr.io/fbadia/seguronamao-frontend:latest
     ports: ["80"]
     dependsOn: [backend]
+    env:
+      - VITE_SUPABASE_URL=https://qmmshawbcwmvqtxjtkxy.supabase.co
+      - VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbXNoYXdiY3dtdnF0eGp0a3h5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2MzQxNjUsImV4cCI6MjA5NTIxMDE2NX0._pbPf5lP2UjLVI8CaY9Lov7AEfK3yJY9aLBx1LPaFSs
     # ┌─ Único ponto de entrada externo (exposed: true = URL pública HTTPS) ──
     # │ Browser → /api/*, /admin/*, /superadmin/*, /health
     # │         → Nginx proxy → backend:3001 (rede interna)

@@ -48,26 +48,22 @@ O sistema estava hospedado em Vercel (frontend) + Render (backend), sem containe
 | `frontend/Dockerfile` (multi-stage: dev + production) | IA | `feat(docker)` |
 | `frontend/nginx.conf` (SPA + proxy reverso) | IA | `feat(docker)` + `fix(docker)` |
 | `frontend/.dockerignore` | IA | `feat(docker)` |
-| `zs.yaml` (manifesto ZeroServer, placement BR) | IA | `feat(docker)` + ajustes |
-| `docker-compose.yml` (dev local hot-reload) | IA | `feat(docker)` |
-| `.github/workflows/deploy.yml` (CI/CD GHCR → ZS) | IA | `feat(docker)` |
-| `AGENTS.md` (contexto completo para IAs) | IA | `docs` |
-| `ENVIRONMENTS.md` atualizado com ZeroServer | IA | `feat(docker)` |
-| Estrutura `docs/` (ADRs, Gestão, API, Arquitetura) | IA | `docs` |
+| `zs.yaml` (manifesto ZeroServer, placement BR) | IA | `feat(docker)` + env Supabase |
+| Configurar CORS no `backend/index.js` para `*.apps.zeroserver.cc` | IA | `fix(cors)` |
 
 ### 🔄 Em Andamento
 
 | Tarefa | Bloqueio |
 |---|---|
-| Login no GHCR e push das imagens de produção | Necessário PAT GitHub com `write:packages` (Classic token) |
-| Primeiro `zs deploy` manual | Aguarda push das imagens + instalação do CLI `zs` |
+| Build local e validação das imagens Docker | Executando `docker compose build` |
+| Login no GHCR e push das imagens de produção | Aguarda build + autenticação GHCR |
+| Primeiro `zs deploy` manual | Aguarda push das imagens |
 
 ### ⏳ Pendentes
 
 | Tarefa | Dependência |
 |---|---|
 | Configurar 4 secrets no GitHub Actions | PAT + ZS_TOKEN do ZeroServer |
-| Atualizar CORS no `backend/index.js` com URL do ZeroServer | URL pública disponível após primeiro deploy |
 | Validar checklist Go/No-Go completo | Deploy funcional |
 | Descomissionar Vercel + Render | 24h de uptime estável no ZeroServer |
 

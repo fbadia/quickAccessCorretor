@@ -25,7 +25,7 @@ const port = process.env.PORT || 3001;
 // ─────────────────────────────────────────────────────────────
 // CORS
 // ─────────────────────────────────────────────────────────────
-const allowedOriginRegex = /^(https:\/\/quick-access-corretor\.vercel\.app|https:\/\/.*\.vercel\.app|http:\/\/localhost:\d+)$/;
+const allowedOriginRegex = /^(https:\/\/quick-access-corretor\.vercel\.app|https:\/\/.*\.vercel\.app|https:\/\/.*\.apps\.zeroserver\.cc|http:\/\/localhost:\d+)$/;
 
 app.use(cors({
   origin: function (origin, callback) {
