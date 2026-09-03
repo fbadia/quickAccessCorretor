@@ -131,3 +131,7 @@ jobs:
           echo "Aguardando inicialização..."
           sleep 15
           zs list
+          echo "### ZeroServer Deploy Status 🚀" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          zs list >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
