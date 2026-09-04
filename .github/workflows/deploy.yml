@@ -68,6 +68,7 @@ jobs:
           tags: |
             ${{ env.BACKEND_IMAGE }}:${{ env.TAG }}
             ${{ env.BACKEND_IMAGE }}:${{ env.SHA_TAG }}
+            ${{ env.BACKEND_IMAGE }}:latest
 
       # ── 5. Build & Push: Frontend ────────────────────────────────────────────
       # As variáveis VITE_* são build-args: ficam embutidas no bundle JS pelo Vite
@@ -80,6 +81,7 @@ jobs:
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ env.TAG }}
             ${{ env.FRONTEND_IMAGE }}:${{ env.SHA_TAG }}
+            ${{ env.FRONTEND_IMAGE }}:latest
           build-args: |
             VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL || 'https://qmmshawbcwmvqtxjtkxy.supabase.co' }}
             VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbXNoYXdiY3dtdnF0eGp0a3h5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2MzQxNjUsImV4cCI6MjA5NTIxMDE2NX0._pbPf5lP2UjLVI8CaY9Lov7AEfK3yJY9aLBx1LPaFSs' }}
