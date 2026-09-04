@@ -11,6 +11,9 @@ export function getSupabaseClient(supabaseUrl, serviceRoleKey) {
     auth: {
       persistSession: false,
       autoRefreshToken: false
+    },
+    realtime: {
+      transport: typeof WebSocket !== "undefined" ? WebSocket : class DummyWebSocket {}
     }
   });
 }

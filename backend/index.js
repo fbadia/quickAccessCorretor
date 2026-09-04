@@ -44,18 +44,24 @@ let supabase;
 
 try {
   supabase = getSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-  seedSuperAdmin(supabase);
-
-  // Job de expiração de endossos pendentes:
-  // Roda imediatamente no boot e depois a cada 24h enquanto o servidor estiver ativo.
-  // Nota: no Render free tier o servidor pode hibernar; a limpeza roda ao acordar.
-  runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage);
-  setInterval(
-    () => runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage),
-    24 * 60 * 60 * 1000
-  );
+  console.log("Supabase client inicializado com sucesso.");
 } catch (error) {
-  console.error("Erro na inicialização:", error.message);
+  console.error("Erro ao inicializar Supabase:", error.message);
+}
+
+if (supabase) {
+  try {
+    seedSuperAdmin(supabase);
+
+    // Job de expiração de endossos pendentes:
+    runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage);
+    setInterval(
+      () => runExpiredEndorsementsCleanup(supabase, deleteFileFromStorage),
+      24 * 60 * 60 * 1000
+    );
+  } catch (error) {
+    console.error("Erro em tarefas secundárias de inicialização:", error.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
