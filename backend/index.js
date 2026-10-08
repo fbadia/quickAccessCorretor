@@ -13,11 +13,22 @@ import {
   saveEndorsementData,
   getPendingEndorsements,
   linkEndorsementToPolicy,
-  runExpiredEndorsementsCleanup
+  runExpiredEndorsementsCleanup,
+  getDecryptedVehicles,
+  anonymizePolicy
 } from "./dbService.js";
 import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage, deleteFileFromStorage } from "./storageService.js";
+import { assertEncryptionConfig } from "./cryptoService.js";
 
 dotenv.config();
+
+// Falha rápido: subir sem as chaves gravaria PII e PDFs em texto claro (ADR-007).
+try {
+  assertEncryptionConfig(process.env.NODE_ENV === "production");
+} catch (error) {
+  console.error(`[Crypto] ${error.message}`);
+  process.exit(1);
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -843,8 +854,26 @@ app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, re
 });
 
 // ─────────────────────────────────────────────────────────────
-// ROTAS DE UPLOAD E PROCESSAMENTO DE APÓLICES
+// ROTAS DE APÓLICES E VEÍCULOS
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/vehicles — Lista veículos e apólices vigentes da organização com PII decifrada em memória (ADR-007 / LGPD).
+ */
+app.get("/api/vehicles", authenticate, async (req, res) => {
+  const orgId = req.profile.organization_id;
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não possui organização associada para visualizar apólices." });
+  }
+
+  try {
+    const vehicles = await getDecryptedVehicles(supabase, orgId);
+    res.json(vehicles);
+  } catch (err) {
+    console.error("Erro ao listar veículos decifrados:", err.message);
+    res.status(500).json({ error: "Erro ao obter veículos da organização." });
+  }
+});
 
 /**
  * POST /api/policies/upload — Upload e processamento imediato de apólices e endossos em PDF.
@@ -1087,6 +1116,27 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
   } catch (err) {
     console.error("Erro ao baixar PDF:", err.message);
     return res.status(500).json({ error: "Erro ao obter o arquivo PDF." });
+  }
+});
+
+/**
+ * DELETE /api/policies/:policyId — Direito ao Esquecimento / Anonimização (Art. 18 LGPD).
+ * Restrito a administradores da organização. Exclui PDFs do Storage e anonimiza dados pessoais.
+ */
+app.delete("/api/policies/:policyId", authenticate, requireOrgAdmin, async (req, res) => {
+  const { policyId } = req.params;
+  const orgId = req.profile.organization_id;
+
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não pode executar anonimização direta em organizações." });
+  }
+
+  try {
+    const result = await anonymizePolicy(supabase, policyId, orgId, deleteFileFromStorage);
+    res.json(result);
+  } catch (err) {
+    console.error(`[LGPD] Erro ao anonimizar apólice ${policyId}:`, err.message);
+    res.status(400).json({ error: err.message });
   }
 });
 

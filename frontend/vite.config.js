@@ -49,8 +49,13 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /supabase\.co/],
         runtimeCaching: [
+          {
+            // Proteção LGPD (ADR-007): chamadas de dados nunca devem ser armazenadas em cache no aparelho
+            urlPattern: ({ url }) => /^\/(api|admin|superadmin)\//.test(url.pathname) || url.hostname.endsWith('.supabase.co'),
+            handler: 'NetworkOnly',
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',

@@ -19,7 +19,7 @@
 | Banco de dados | PostgreSQL (via Supabase) | 15 | Supabase Cloud |
 | Autenticação | Supabase Auth (Magic Link) | — | Supabase Cloud |
 | Armazenamento de PDFs | Supabase Storage | — | Supabase Cloud |
-| IA / Extração | Google Gemini 1.5 Flash | — | Google AI Studio |
+| IA / Extração | Google Gemini Flash (`gemini-flash-latest`) | — | Google AI Studio |
 | Estilo | CSS Vanilla (mobile-first) | — | — |
 | PWA | VitePWA + Workbox | — | — |
 | CI/CD | GitHub Actions | — | GHCR + ZeroServer |
@@ -114,7 +114,7 @@ backend: calcula SHA-256
 backend: upload → Supabase Storage (policies/{orgId}/{filename})
    │
    ▼
-backend: Gemini 1.5 Flash analisa PDF → JSON estruturado
+backend: Gemini Flash analisa PDF → JSON estruturado
    │
    ├── document_type = "policy"      → savePolicyData() → 201
    └── document_type = "endorsement" → saveEndorsementData()

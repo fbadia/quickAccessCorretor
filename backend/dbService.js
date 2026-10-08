@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { encryptText, decryptText, generateBlindIndex, getEncryptionKeys } from "./cryptoService.js";
 
 /**
  * Inicializa o cliente do Supabase com a chave de Service Role (bypass RLS).
@@ -74,32 +75,68 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
       insurer = newIns;
     }
 
-    // 2. Obter ou Criar Cliente (scoped por org)
-    const clientName = extractedData.segurado.nome;
-    const cpfCnpj = extractedData.segurado.cpf_cnpj;
+    // 2. Obter ou Criar Cliente (scoped por org com suporte a ALE / LGPD)
+    const { dbKey, hmacKey } = getEncryptionKeys();
 
-    let { data: client, error: cliError } = await supabase
-      .from("clients")
-      .select("id")
-      .eq("cpf_cnpj", cpfCnpj)
-      .eq("organization_id", organizationId)
-      .maybeSingle();
+    const rawClientName = extractedData.segurado.nome;
+    const rawCpfCnpj = extractedData.segurado.cpf_cnpj;
 
-    if (cliError) throw cliError;
+    const cpfBidx = hmacKey ? generateBlindIndex(rawCpfCnpj, hmacKey) : null;
+    const encryptedClientName = dbKey ? encryptText(rawClientName, dbKey) : rawClientName;
+    const encryptedCpfCnpj = dbKey ? encryptText(rawCpfCnpj, dbKey) : rawCpfCnpj;
+
+    // Busca cliente por blind index (se disponível) ou por CPF original (legado)
+    let client = null;
+    if (cpfBidx) {
+      const { data: bidxClient, error: bidxError } = await supabase
+        .from("clients")
+        .select("id, cpf_bidx")
+        .eq("cpf_bidx", cpfBidx)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (bidxError) throw bidxError;
+      client = bidxClient;
+    }
 
     if (!client) {
+      const { data: legacyClient, error: cliError } = await supabase
+        .from("clients")
+        .select("id, cpf_bidx")
+        .eq("cpf_cnpj", rawCpfCnpj)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+
+      if (cliError) throw cliError;
+      client = legacyClient;
+    }
+
+    if (!client) {
+      const newClientPayload = {
+        name: encryptedClientName,
+        cpf_cnpj: encryptedCpfCnpj,
+        organization_id: organizationId
+      };
+      if (cpfBidx) newClientPayload.cpf_bidx = cpfBidx;
+
       const { data: newCli, error: newCliErr } = await supabase
         .from("clients")
-        .insert({ name: clientName, cpf_cnpj: cpfCnpj, organization_id: organizationId })
+        .insert(newClientPayload)
         .select("id")
         .single();
 
       if (newCliErr) throw newCliErr;
       client = newCli;
     } else {
+      const updateClientPayload = { name: encryptedClientName };
+      // Migração transparente: se o registro legado ainda não tinha blind index, atualiza
+      if (cpfBidx && !client.cpf_bidx) {
+        updateClientPayload.cpf_bidx = cpfBidx;
+        updateClientPayload.cpf_cnpj = encryptedCpfCnpj;
+      }
+
       await supabase
         .from("clients")
-        .update({ name: clientName })
+        .update(updateClientPayload)
         .eq("id", client.id);
     }
 
@@ -129,29 +166,34 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
 
     if (polError) throw polError;
 
-    // 4. Recriar veículo associado à apólice
+    // 4. Recriar veículo associado à apólice (com ALE e Blind Index)
     await supabase
       .from("vehicles")
       .delete()
       .eq("policy_id", policy.id);
 
-    const vehiclePlate = extractedData.veiculo.placa;
-    const vehicleModel = extractedData.veiculo.marca_modelo;
+    const rawVehiclePlate = extractedData.veiculo.placa;
+    const plateBidx = hmacKey ? generateBlindIndex(rawVehiclePlate, hmacKey) : null;
+    const encryptedVehiclePlate = dbKey ? encryptText(rawVehiclePlate, dbKey) : rawVehiclePlate;
+    const vehicleModel = extractedData.veiculo.brand_model || extractedData.veiculo.marca_modelo;
     const vehicleYear = extractedData.veiculo.ano;
+
+    const vehiclePayload = {
+      policy_id: policy.id,
+      plate: encryptedVehiclePlate,
+      brand_model: vehicleModel,
+      year: vehicleYear,
+      organization_id: organizationId
+    };
+    if (plateBidx) vehiclePayload.plate_bidx = plateBidx;
 
     const { error: vehError } = await supabase
       .from("vehicles")
-      .insert({
-        policy_id: policy.id,
-        plate: vehiclePlate,
-        brand_model: vehicleModel,
-        year: vehicleYear,
-        organization_id: organizationId
-      });
+      .insert(vehiclePayload);
 
     if (vehError) throw vehError;
 
-    console.log(`Sucesso ao salvar apólice ${policyNumber} de ${clientName} (Org: ${organizationId})`);
+    console.log(`Sucesso ao salvar apólice ${policyNumber} (Org: ${organizationId})`);
     return { success: true, policyId: policy.id };
   } catch (error) {
     console.error(`Erro ao salvar dados da apólice (Storage Path: ${storagePath}):`, error);
@@ -219,10 +261,18 @@ export async function seedInsurers(supabase, organizationId) {
 }
 
 /**
- * Garante que o superadmin (fbadia@gmail.com) exista no sistema sem vinculação a uma org.
+ * Garante que o superadmin exista no sistema sem vinculação a uma org.
+ * O e-mail vem de SUPERADMIN_EMAIL e a senha inicial de SUPERADMIN_INITIAL_PASSWORD.
+ * Nunca há senha padrão: sem as variáveis, nenhum usuário é criado.
  */
 export async function seedSuperAdmin(supabase) {
-  const superAdminEmail = "fbadia@gmail.com";
+  const superAdminEmail = process.env.SUPERADMIN_EMAIL?.trim().toLowerCase();
+  const superAdminInitialPassword = process.env.SUPERADMIN_INITIAL_PASSWORD;
+
+  if (!superAdminEmail) {
+    console.warn("SUPERADMIN_EMAIL não definido. Seed do superadmin ignorado.");
+    return;
+  }
   try {
     const { data: existingProfile, error: checkError } = await supabase
       .from("profiles")
@@ -268,10 +318,14 @@ export async function seedSuperAdmin(supabase) {
           console.log(`Perfil do SuperAdmin criado e sincronizado.`);
         }
       } else {
+        if (!superAdminInitialPassword || superAdminInitialPassword.length < 12) {
+          console.warn("SuperAdmin não existe no Auth e SUPERADMIN_INITIAL_PASSWORD está ausente ou tem menos de 12 caracteres. Usuário não criado.");
+          return;
+        }
         console.log("SuperAdmin não existe no Auth. Criando usuário e perfil...");
         const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
           email: superAdminEmail,
-          password: "Badia@123",
+          password: superAdminInitialPassword,
           email_confirm: true,
           user_metadata: {
             name: "Flávio",
@@ -339,13 +393,18 @@ async function applyEndorsementChanges(supabase, policyId, endorsementType, chan
   // 1. Buscar a apólice para obter client_id
   const { data: policy, error: policyFetchError } = await supabase
     .from("policies")
-    .select("id, client_id")
+    .select("id, client_id, organization_id")
     .eq("id", policyId)
     .maybeSingle();
 
   if (policyFetchError || !policy) {
     throw new Error(`Não foi possível buscar a apólice ${policyId} para aplicar o endosso.`);
   }
+
+  // PII dos endossos recebe a mesma ALE + blind index do fluxo de apólices (ADR-007)
+  const { dbKey, hmacKey } = getEncryptionKeys();
+  const protect = (value) => (dbKey ? encryptText(value, dbKey) : value);
+  const blindIndex = (value) => (hmacKey ? generateBlindIndex(value, hmacKey) : null);
 
   // 2. Aplicar alterações conforme o tipo
   if (endorsementType === "vehicle_change") {
@@ -362,7 +421,8 @@ async function applyEndorsementChanges(supabase, policyId, endorsementType, chan
         .from("vehicles")
         .insert({
           policy_id: policyId,
-          plate: changes.plate || null,
+          plate: changes.plate ? protect(changes.plate) : null,
+          plate_bidx: blindIndex(changes.plate),
           brand_model: changes.brand_model || null,
           year: changes.year || null,
           is_current: true,
@@ -374,8 +434,11 @@ async function applyEndorsementChanges(supabase, policyId, endorsementType, chan
 
   if (endorsementType === "insured_change") {
     const clientUpdate = {};
-    if (changes.insured_name) clientUpdate.name = changes.insured_name;
-    if (changes.cpf_cnpj) clientUpdate.cpf_cnpj = changes.cpf_cnpj;
+    if (changes.insured_name) clientUpdate.name = protect(changes.insured_name);
+    if (changes.cpf_cnpj) {
+      clientUpdate.cpf_cnpj = protect(changes.cpf_cnpj);
+      clientUpdate.cpf_bidx = blindIndex(changes.cpf_cnpj);
+    }
 
     if (Object.keys(clientUpdate).length > 0) {
       const { error: cliError } = await supabase
@@ -633,3 +696,208 @@ export async function runExpiredEndorsementsCleanup(supabase, deleteFileFn) {
     console.error("[Cleanup] Erro inesperado no job de expiração:", err.message);
   }
 }
+
+/**
+ * Busca veículos vigentes de uma organização e decifra os campos PII em memória (LGPD / ADR-007).
+ * Garante busca rápida e preserva os dados protegidos contra dumps do banco.
+ * 
+ * @param {Object} supabase Cliente do Supabase.
+ * @param {string} organizationId UUID da organização.
+ * @returns {Promise<Array>} Lista de veículos com dados de apólice e cliente decifrados.
+ */
+export async function getDecryptedVehicles(supabase, organizationId) {
+  if (!organizationId) {
+    throw new Error("organizationId é obrigatório para consultar veículos.");
+  }
+
+  const { data, error } = await supabase
+    .from("vehicles")
+    .select(`
+      id,
+      plate,
+      brand_model,
+      year,
+      policy:policies (
+        id,
+        policy_number,
+        storage_path,
+        start_date,
+        end_date,
+        client:clients (
+          id,
+          name,
+          cpf_cnpj
+        ),
+        insurer:insurers (
+          id,
+          name,
+          assistance_phone,
+          assistance_whatsapp,
+          claims_phone,
+          claims_url
+        )
+      )
+    `)
+    .eq("is_current", true)
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error(`Erro ao buscar veículos da org ${organizationId}:`, error.message);
+    throw error;
+  }
+
+  if (!data || data.length === 0) return [];
+
+  const { dbKey } = getEncryptionKeys();
+  if (!dbKey) {
+    return data;
+  }
+
+  // Um registro indecifrável não pode derrubar a listagem da organização inteira:
+  // o campo é ocultado e o erro é logado sem expor o conteúdo.
+  const safeDecrypt = (value, field, vehicleId) => {
+    try {
+      return decryptText(value, dbKey);
+    } catch (err) {
+      console.error(`[LGPD] Falha ao decifrar ${field} do veículo ${vehicleId}: ${err.message}`);
+      return null;
+    }
+  };
+
+  // Decifra os campos PII em memória para entrega via HTTPS à sessão autenticada
+  return data.map(veh => {
+    const rawPlate = veh.plate;
+    const policy = veh.policy;
+    const client = policy?.client;
+
+    return {
+      ...veh,
+      plate: safeDecrypt(rawPlate, "plate", veh.id),
+      policy: policy ? {
+        ...policy,
+        client: client ? {
+          ...client,
+          name: safeDecrypt(client.name, "name", veh.id),
+          cpf_cnpj: safeDecrypt(client.cpf_cnpj, "cpf_cnpj", veh.id)
+        } : null
+      } : null
+    };
+  });
+}
+
+/**
+ * Executa o Direito ao Esquecimento e Anonimização (Art. 18 LGPD / ADR-007).
+ * Exclui fisicamente os arquivos do Storage e anonimiza os dados contratuais na base.
+ * 
+ * @param {Object} supabase Cliente do Supabase (service role).
+ * @param {string} policyId UUID da apólice.
+ * @param {string} organizationId UUID da organização dona da apólice.
+ * @param {Function} deleteFileFn Função para exclusão no storage.
+ */
+export async function anonymizePolicy(supabase, policyId, organizationId, deleteFileFn) {
+  if (!policyId || !organizationId) {
+    throw new Error("policyId e organizationId são obrigatórios para anonimização.");
+  }
+
+  // 1. Localizar a apólice garantindo o isolamento do tenant
+  const { data: policy, error: fetchErr } = await supabase
+    .from("policies")
+    .select("id, client_id, storage_path, organization_id")
+    .eq("id", policyId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchErr || !policy) {
+    throw new Error("Apólice não encontrada ou acesso negado.");
+  }
+
+  // 2. Excluir o arquivo PDF principal do Storage
+  if (policy.storage_path && deleteFileFn) {
+    try {
+      await deleteFileFn(supabase, policy.storage_path);
+      console.log(`[LGPD] Arquivo de apólice removido do storage: ${policy.storage_path}`);
+    } catch (storageErr) {
+      console.error(`[LGPD] Erro ao remover arquivo do storage:`, storageErr.message);
+    }
+  }
+
+  // 3. Excluir arquivos de endossos vinculados do Storage
+  const { data: endorsements } = await supabase
+    .from("endorsements")
+    .select("id, storage_path")
+    .eq("policy_id", policyId);
+
+  if (endorsements && endorsements.length > 0) {
+    for (const endo of endorsements) {
+      if (endo.storage_path && deleteFileFn) {
+        try {
+          await deleteFileFn(supabase, endo.storage_path);
+        } catch (e) {
+          console.error(`[LGPD] Erro ao remover endosso do storage:`, e.message);
+        }
+      }
+    }
+  }
+
+  // 4. Anonimizar dados do veículo associado
+  const { error: vehicleAnonErr } = await supabase
+    .from("vehicles")
+    .update({
+      plate: "ANONIMIZADO",
+      plate_bidx: null,
+      brand_model: "VEÍCULO ANONIMIZADO"
+    })
+    .eq("policy_id", policyId);
+
+  if (vehicleAnonErr) {
+    throw new Error(`Erro ao anonimizar veículos da apólice: ${vehicleAnonErr.message}`);
+  }
+
+  // 5. Anonimizar ou expurgar dados do cliente (se não tiver outras apólices ativas)
+  if (policy.client_id) {
+    const { count, error: countErr } = await supabase
+      .from("policies")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", policy.client_id)
+      .neq("id", policyId);
+
+    if (countErr) {
+      throw new Error(`Erro ao verificar outras apólices do titular: ${countErr.message}`);
+    }
+
+    if (!count) {
+      // cpf_cnpj = NULL (Story 1.5): um valor fixo colidiria com a UNIQUE de cpf_cnpj
+      // a partir do segundo titular anonimizado.
+      const { error: clientAnonErr } = await supabase
+        .from("clients")
+        .update({
+          name: "TITULAR ANONIMIZADO",
+          cpf_cnpj: null,
+          cpf_bidx: null
+        })
+        .eq("id", policy.client_id);
+
+      if (clientAnonErr) {
+        throw new Error(`Erro ao anonimizar dados do titular: ${clientAnonErr.message}`);
+      }
+    }
+  }
+
+  // 6. Limpar metadados da apólice
+  const { error: updatePolicyErr } = await supabase
+    .from("policies")
+    .update({
+      storage_path: null,
+      file_hash: null,
+      raw_extracted_data: null
+    })
+    .eq("id", policyId);
+
+  if (updatePolicyErr) {
+    throw new Error(`Erro ao limpar metadados da apólice: ${updatePolicyErr.message}`);
+  }
+
+  return { success: true, message: "Apólice e dados pessoais anonimizados em conformidade com a LGPD." };
+}
+

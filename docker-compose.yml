@@ -31,7 +31,7 @@ services:
       context: ./frontend
       target: dev          # usa o estágio dev com Vite
     ports:
-      - "5173:5173"
+      - "3000:5173"
     env_file:
       - ./frontend/.env    # carrega VITE_* do .env local
     volumes:

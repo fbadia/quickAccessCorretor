@@ -3,14 +3,18 @@
  * Gerencia o upload, download e exclusão de arquivos no bucket 'policies'.
  */
 
+import { encryptBuffer, decryptBuffer, isEncryptedBuffer } from "./cryptoService.js";
+
 const BUCKET_NAME = "policies";
 
 /**
  * Envia um arquivo PDF para o Supabase Storage dentro da pasta da organização.
+ * Aplica criptografia AES-256-GCM caso STORAGE_ENCRYPTION_KEY esteja configurada (ADR-007 / LGPD).
+ * 
  * @param {Object} supabase Cliente do Supabase (com bypass de RLS via Service Role).
  * @param {string} organizationId UUID da organização dona do arquivo.
  * @param {string} fileName Nome original ou higienizado do arquivo.
- * @param {Buffer} fileBuffer Buffer do arquivo.
+ * @param {Buffer} fileBuffer Buffer original do arquivo em memória.
  * @returns {Promise<string>} O caminho do arquivo gravado no storage (ex: "org_uuid/arquivo.pdf").
  */
 export async function uploadFileToStorage(supabase, organizationId, fileName, fileBuffer) {
@@ -25,17 +29,30 @@ export async function uploadFileToStorage(supabase, organizationId, fileName, fi
   const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
   const storagePath = `${organizationId}/${sanitizedFileName}`;
 
+  // Criptografia em repouso (LGPD / ADR-007)
+  const encryptionKey = process.env.STORAGE_ENCRYPTION_KEY;
+  let payloadBuffer = fileBuffer;
+  let isEncrypted = false;
+
+  if (encryptionKey) {
+    payloadBuffer = encryptBuffer(fileBuffer, encryptionKey);
+    isEncrypted = true;
+    console.log(`[Storage] Arquivo "${sanitizedFileName}" criptografado com sucesso (AES-256-GCM / SNM1) antes do upload.`);
+  } else {
+    console.warn(`[Storage] ATENÇÃO: STORAGE_ENCRYPTION_KEY não configurada. Arquivo "${sanitizedFileName}" salvo em texto claro.`);
+  }
+
   try {
     const { data, error } = await supabase.storage
       .from(BUCKET_NAME)
-      .upload(storagePath, fileBuffer, {
-        contentType: "application/pdf",
+      .upload(storagePath, payloadBuffer, {
+        contentType: isEncrypted ? "application/octet-stream" : "application/pdf",
         upsert: true
       });
 
     if (error) throw error;
 
-    console.log(`[Storage] Upload concluído com sucesso: ${storagePath}`);
+    console.log(`[Storage] Upload concluído com sucesso: ${storagePath} (Criptografado: ${isEncrypted})`);
     return storagePath;
   } catch (error) {
     console.error(`[Storage] Erro ao fazer upload de ${fileName}:`, error.message);
@@ -44,10 +61,11 @@ export async function uploadFileToStorage(supabase, organizationId, fileName, fi
 }
 
 /**
- * Baixa um arquivo do Supabase Storage.
+ * Baixa um arquivo do Supabase Storage e realiza a decifração em memória se estiver criptografado.
+ * 
  * @param {Object} supabase Cliente do Supabase.
  * @param {string} storagePath Caminho completo do arquivo no bucket (ex: "org_uuid/arquivo.pdf").
- * @returns {Promise<Buffer>} Buffer do arquivo baixado.
+ * @returns {Promise<Buffer>} Buffer do arquivo original legível em memória.
  */
 export async function downloadFileFromStorage(supabase, storagePath) {
   if (!storagePath) {
@@ -63,10 +81,25 @@ export async function downloadFileFromStorage(supabase, storagePath) {
 
     // Converter blob/arrayBuffer retornado para Buffer do Node.js
     const arrayBuffer = await data.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const rawBuffer = Buffer.from(arrayBuffer);
+
+    const encryptionKey = process.env.STORAGE_ENCRYPTION_KEY;
+
+    // Se o buffer estiver cifrado no formato envelope SeguroNaMão
+    if (isEncryptedBuffer(rawBuffer)) {
+      if (!encryptionKey) {
+        throw new Error("Arquivo está criptografado no storage, mas STORAGE_ENCRYPTION_KEY não foi configurada no servidor.");
+      }
+      const decrypted = decryptBuffer(rawBuffer, encryptionKey);
+      console.log(`[Storage] Arquivo ${storagePath} decifrado com sucesso em memória.`);
+      return decrypted;
+    }
+
+    // Compatibilidade com arquivos legados gravados em PDF direto
+    return rawBuffer;
   } catch (error) {
-    console.error(`[Storage] Erro ao fazer download de ${storagePath}:`, error.message);
-    throw new Error(`Falha no download do arquivo do storage: ${error.message}`);
+    console.error(`[Storage] Erro ao obter arquivo ${storagePath}:`, error.message);
+    throw new Error(`Falha no download/decifração do arquivo do storage: ${error.message}`);
   }
 }
 

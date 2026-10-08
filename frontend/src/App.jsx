@@ -194,45 +194,76 @@ export default function App() {
     }
   };
 
-  // Buscar dados principais (veículos + apólices)
+  // Buscar dados principais (veículos + apólices decifrados via backend com ALE / LGPD)
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("vehicles")
-        .select(`
-          id,
-          plate,
-          brand_model,
-          year,
-          policy:policies (
-            id,
-            policy_number,
-            storage_path,
-            start_date,
-            end_date,
-            client:clients (
-              id,
-              name,
-              cpf_cnpj
-            ),
-            insurer:insurers (
-              id,
-              name,
-              assistance_phone,
-              assistance_whatsapp,
-              claims_phone,
-              claims_url
-            )
-          )
-        `)
-        .eq("is_current", true)
-        .eq("organization_id", profile.organization_id)  // defesa em profundidade além do RLS
-        .order("created_at", { ascending: false });
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const token = session?.access_token;
 
-      if (error) throw error;
-      setVehicles(data || []);
-      setSearchResults(data ? data.slice(0, 10) : []);
+      let vehicleList = null;
+
+      // 1. Prioridade: Buscar via backend autenticado (com decifração em memória no servidor - ADR-007)
+      if (token) {
+        try {
+          const res = await fetch(`${backendUrl}/api/vehicles`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (!res.ok) {
+            // Backend respondeu com erro: não cair no Supabase direto, que só devolveria
+            // ciphertext ("enc:v1:...") e quebraria a busca.
+            throw new Error(`Backend retornou ${res.status} ao listar veículos.`);
+          }
+          vehicleList = await res.json();
+        } catch (apiErr) {
+          if (!(apiErr instanceof TypeError)) throw apiErr;
+          // TypeError = falha de rede (backend inacessível): segue para o fallback
+          console.warn("Backend indisponível, tentando fallback direto no Supabase:", apiErr.message);
+        }
+      }
+
+      // 2. Fallback direto no Supabase apenas se o backend estiver inacessível (dados legados em texto claro)
+      if (!vehicleList) {
+        const { data, error } = await supabase
+          .from("vehicles")
+          .select(`
+            id,
+            plate,
+            brand_model,
+            year,
+            policy:policies (
+              id,
+              policy_number,
+              storage_path,
+              start_date,
+              end_date,
+              client:clients (
+                id,
+                name,
+                cpf_cnpj
+              ),
+              insurer:insurers (
+                id,
+                name,
+                assistance_phone,
+                assistance_whatsapp,
+                claims_phone,
+                claims_url
+              )
+            )
+          `)
+          .eq("is_current", true)
+          .eq("organization_id", profile.organization_id)  // defesa em profundidade além do RLS
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+        vehicleList = data || [];
+      }
+
+      setVehicles(vehicleList || []);
+      setSearchResults(vehicleList ? vehicleList.slice(0, 10) : []);
     } catch (err) {
       console.error("Erro ao buscar apólices:", err.message);
       showToast("Erro ao sincronizar com o banco", "error");
