@@ -198,7 +198,7 @@ export default function App() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const token = session?.access_token;
 
       let vehicleList = null;
@@ -275,7 +275,7 @@ export default function App() {
   // Buscar dados da área administrativa (via backend autenticado)
   const fetchAdminData = async () => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const token = session?.access_token;
 
       // 1. Buscar usuários da org via backend (escoped por org)
@@ -294,7 +294,7 @@ export default function App() {
   // Buscar endossos pendentes da org (aba Pendências)
   const fetchPendingEndorsements = async () => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const token = session?.access_token;
       const res = await fetch(`${backendUrl}/api/endorsements/pending`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -414,7 +414,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     if (!policyId || !session?.access_token) return;
     setPdfLoading(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const res = await fetch(`${backendUrl}/api/policies/${policyId}/download`, {
         headers: {
           Authorization: `Bearer ${session.access_token}`
@@ -497,7 +497,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     if (selectedFiles.length === 0) return;
     setUploading(true);
 
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+    const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
     const token = session?.access_token;
 
     const report = { policies: [], applied: [], pending: [] };
@@ -582,7 +582,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
     setInviteLoading(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users`, {
         method: "POST",
         headers: {
@@ -632,7 +632,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
     setSavingUser(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const body = {
         name: editUserName.trim(),
         email: editUserEmail.trim(),
@@ -669,7 +669,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
   // Toggle de status do usuário (is_active)
   const toggleUserStatus = async (userId, currentStatus) => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
         method: "PATCH",
         headers: {
@@ -698,7 +698,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
         method: "DELETE",
         headers: {
@@ -1587,7 +1587,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                                   title="Ver PDF do endosso"
                                   onClick={async () => {
                                     try {
-                                      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                                      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
                                       const token = session?.access_token;
                                       const res = await fetch(`${backendUrl}/api/endorsements/${e.id}/download`, {
                                         headers: { Authorization: `Bearer ${token}` }
@@ -1738,7 +1738,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                       if (!v.policy?.id) return;
                       setLinkLoading(true);
                       try {
-                        const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                        const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
                         const token = session?.access_token;
                         const res = await fetch(`${backendUrl}/api/endorsements/${linkingEndorsement.id}/link`, {
                           method: "PATCH",

@@ -11,6 +11,16 @@ on:
 #   VITE_SUPABASE_ANON_KEY   Anon key do Supabase
 #   ZS_TOKEN                 Token do ZeroServer (conta de produção)
 #   ZS_TOKEN_DEV             Token do ZeroServer (conta/ambiente de dev)
+#   SUPABASE_SERVICE_ROLE_KEY  Service role do Supabase (backend)
+#   GEMINI_API_KEY             Chave da API do Gemini
+#   STORAGE_ENCRYPTION_KEY     AES-256 dos PDFs no Storage (64 hex) — OBRIGATÓRIO
+#   DB_ENCRYPTION_KEY          AES-256 dos campos PII no banco (64 hex) — OBRIGATÓRIO
+#   SEARCH_HMAC_KEY            HMAC dos blind indexes (64 hex) — OBRIGATÓRIO
+#   SUPERADMIN_EMAIL           E-mail do superadmin inicial (opcional)
+#   SUPERADMIN_INITIAL_PASSWORD  Senha inicial do superadmin, ≥ 12 caracteres (opcional)
+#
+#   ⚠️ As chaves de criptografia são permanentes: perdê-las torna os dados cifrados
+#   irrecuperáveis. Guarde uma cópia fora do GitHub (gerenciador de senhas).
 #
 # Nota: VITE_BACKEND_URL não é um secret — em produção é string vazia.
 # O Nginx faz proxy de /api/* e /admin/* para o backend internamente.
