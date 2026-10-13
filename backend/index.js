@@ -879,6 +879,30 @@ app.get("/api/vehicles", authenticate, async (req, res) => {
  * POST /api/policies/upload — Upload e processamento imediato de apólices e endossos em PDF.
  * O sistema detecta automaticamente o tipo de documento via Gemini e roteia adequadamente.
  */
+/**
+ * Remove do Storage um PDF cujo processamento falhou depois do upload — desde que nenhuma
+ * apólice ou endosso já o referencie (uma gravação parcial no banco mantém o arquivo).
+ * Evita PDFs órfãos com dados pessoais no bucket (LGPD / ADR-007).
+ */
+async function removeUnreferencedUpload(storagePath) {
+  try {
+    const [{ count: policyRefs, error: polErr }, { count: endoRefs, error: endoErr }] = await Promise.all([
+      supabase.from("policies").select("id", { count: "exact", head: true }).eq("storage_path", storagePath),
+      supabase.from("endorsements").select("id", { count: "exact", head: true }).eq("storage_path", storagePath),
+    ]);
+    if (polErr || endoErr) throw polErr || endoErr;
+
+    if (policyRefs || endoRefs) {
+      console.warn(`[Upload] Arquivo ${storagePath} mantido: já referenciado no banco após falha parcial.`);
+      return;
+    }
+    await deleteFileFromStorage(supabase, storagePath);
+    console.log(`[Upload] Arquivo órfão removido do Storage após falha: ${storagePath}`);
+  } catch (cleanupErr) {
+    console.error(`[Upload] Não foi possível limpar ${storagePath} após falha:`, cleanupErr.message);
+  }
+}
+
 app.post("/api/policies/upload", authenticate, upload.single("file"), async (req, res) => {
   const orgId = req.profile.organization_id;
   if (!orgId) {
@@ -891,6 +915,7 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
   }
 
   const fileName = file.originalname;
+  let storagePath = null;
 
   try {
     console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
@@ -935,11 +960,14 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
       });
     }
 
-    // 3. Fazer upload para o Supabase Storage
-    const storagePath = await uploadFileToStorage(supabase, orgId, fileName, file.buffer);
-
-    // 4. Extrair dados via Gemini (detecta automaticamente o tipo)
+    // 3. Extrair dados via Gemini ANTES de gravar no Storage: se a extração falhar
+    //    (créditos, cota, PDF ilegível), nenhum arquivo órfão fica no bucket.
     const extractedData = await extractDocumentData(file.buffer, process.env.GEMINI_API_KEY);
+
+    // 4. Upload para o Supabase Storage. O prefixo do hash torna o caminho único:
+    //    PDFs diferentes com o mesmo nome não se sobrescrevem (upsert), e a limpeza
+    //    em caso de erro nunca apaga o arquivo de outra apólice.
+    storagePath = await uploadFileToStorage(supabase, orgId, `${fileHash.slice(0, 16)}_${fileName}`, file.buffer);
 
     let responsePayload;
 
@@ -988,6 +1016,10 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
 
   } catch (err) {
     console.error(`[Upload] Erro ao processar arquivo ${fileName}:`, err.message);
+
+    if (storagePath) {
+      await removeUnreferencedUpload(storagePath);
+    }
 
     await supabase
       .from("organizations")

@@ -228,9 +228,12 @@ DELETE /api/policies/:policyId                 # Direito ao esquecimento (requir
 Fluxo:
 1. Recebe arquivo via `multipart/form-data` (campo `file`, max 10MB)
 2. Calcula SHA-256 para deduplicação
-3. Faz upload para Supabase Storage (`policies/{orgId}/{filename}`)
-4. Chama Gemini para extrair dados e detectar tipo (apólice ou endosso)
-5. Salva no banco via `dbService.js`
+3. Chama Gemini para extrair dados e detectar tipo (apólice ou endosso) — **antes** do Storage,
+   para que uma falha de extração não deixe PDF órfão no bucket
+4. Faz upload cifrado para o Supabase Storage (`policies/{orgId}/{hash16}_{filename}`); o prefixo
+   do hash evita que PDFs diferentes com o mesmo nome se sobrescrevam
+5. Salva no banco via `dbService.js` — se falhar, o PDF é removido do Storage caso nenhum
+   registro o referencie (`removeUnreferencedUpload`)
 6. Retorna `201` (criado) ou `202` (endosso pendente de vínculo) ou `200` (duplicado)
 
 ---
