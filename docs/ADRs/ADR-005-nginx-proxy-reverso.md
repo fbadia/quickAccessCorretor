@@ -58,6 +58,6 @@ Qualquer nova rota do backend que precise ser acessível pelo browser **deve** t
 
 ```javascript
 // frontend: chamada correta em produção
-const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
 // Em prod: VITE_BACKEND_URL="" → chamada para /api/... → mesmo domínio → Nginx roteia
 ```
