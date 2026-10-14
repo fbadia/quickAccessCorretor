@@ -51,6 +51,8 @@ quickAccessCorretor/
 │   ├── storageService.js  # Upload/download/delete no Supabase Storage (cifra/decifra PDFs)
 │   ├── cryptoService.js   # AES-256-GCM (PDFs e PII), blind index HMAC, validação das chaves
 │   ├── testCryptoService.js # Testes do módulo criptográfico (node testCryptoService.js)
+│   ├── encryptLegacyData.js # Backfill LGPD: cifra dados antigos e renomeia PDFs (simula; --apply grava)
+│   ├── errors.js          # UserFacingError / toHttpError (mensagens seguras ao cliente)
 │   ├── testParser.js      # Utilitário CLI para testar extração de PDF local
 │   ├── Dockerfile         # Multi-stage: dev (nodemon) + production (node)
 │   ├── .dockerignore
@@ -230,8 +232,8 @@ Fluxo:
 2. Calcula SHA-256 para deduplicação
 3. Chama Gemini para extrair dados e detectar tipo (apólice ou endosso) — **antes** do Storage,
    para que uma falha de extração não deixe PDF órfão no bucket
-4. Faz upload cifrado para o Supabase Storage (`policies/{orgId}/{hash16}_{filename}`); o prefixo
-   do hash evita que PDFs diferentes com o mesmo nome se sobrescrevam
+4. Faz upload cifrado para o Supabase Storage (`policies/{orgId}/{sha256}.pdf`); o caminho é único
+   e não usa o nome original do arquivo, que costuma conter nome do segurado e placa
 5. Salva no banco via `dbService.js` — se falhar, o PDF é removido do Storage caso nenhum
    registro o referencie (`removeUnreferencedUpload`)
 6. Retorna `201` (criado) ou `202` (endosso pendente de vínculo) ou `200` (duplicado)
@@ -392,7 +394,9 @@ SEARCH_HMAC_KEY=               # blind indexes (nunca reutilizar a DB_ENCRYPTION
 - **LGPD (ADR-007):** nome, CPF/CNPJ e placa só podem ser gravados via `encryptText` + blind index
   (`generateBlindIndex`) — inclusive em fluxos secundários como endossos. Buscas exatas usam as
   colunas `*_bidx`, nunca o valor em claro. Arquivos vão ao Storage sempre por `storageService.js`.
-- Nunca logar PII (nome, CPF, placa) — logar apenas IDs.
+- Nunca logar PII (nome, CPF, placa, e-mail, nome original do arquivo) — logar apenas IDs e hashes.
+- Erros devolvidos ao cliente: só mensagens de `UserFacingError` (`backend/errors.js`); qualquer
+  outro erro vira mensagem genérica via `toHttpError`, com o detalhe apenas no log.
 
 ### Banco de Dados
 

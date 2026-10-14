@@ -136,7 +136,7 @@ Upload e processamento de PDF (apólice ou endosso).
 1. Valida MIME type (`application/pdf`)
 2. Calcula SHA-256 e verifica duplicata
 3. Envia para Gemini → detecta tipo + extrai dados (antes do Storage: se falhar, nada é gravado)
-4. Faz upload cifrado para o Supabase Storage em `{orgId}/{hash16}_{arquivo}.pdf`
+4. Faz upload cifrado para o Supabase Storage em `{orgId}/{sha256}.pdf` (sem o nome original, que pode conter dados pessoais)
 5. Salva no banco
 6. Em caso de erro após o upload, remove o PDF do Storage se nenhum registro o referenciar
 

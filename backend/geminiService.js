@@ -1,4 +1,7 @@
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { UserFacingError } from "./errors.js";
+
+const AI_UNAVAILABLE_MESSAGE = "O serviço de leitura de PDFs está indisponível no momento. Tente novamente em alguns minutos.";
 
 const nullableString = { type: SchemaType.STRING, nullable: true };
 const nullableDate = { type: SchemaType.STRING, format: "date", nullable: true };
@@ -190,11 +193,11 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
         responseText = result.response.text();
       } catch (fallbackError) {
         console.error(`[Gemini] Falha também no modelo de fallback ${modelName}:`, fallbackError);
-        throw new Error(`Falha na extração de dados com Gemini (ambos os modelos falharam): ${fallbackError.message}`);
+        throw new UserFacingError(AI_UNAVAILABLE_MESSAGE, 503);
       }
     } else {
       console.error("Erro na chamada da API do Gemini:", error);
-      throw new Error(`Falha na extração de dados com Gemini: ${error.message}`);
+      throw new UserFacingError(AI_UNAVAILABLE_MESSAGE, 503);
     }
   }
 
@@ -212,8 +215,9 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
     const extractedData = sanitizeExtractedData(parsedData);
     return extractedData;
   } catch (parseError) {
-    console.error("Erro ao parsear JSON retornado pelo Gemini:", parseError, "Resposta:", responseText);
-    throw new Error(`Resposta do Gemini inválida ou mal-formatada: ${parseError.message}`);
+    // A resposta bruta não é logada: contém os dados pessoais extraídos do PDF
+    console.error("Erro ao parsear JSON retornado pelo Gemini:", parseError.message);
+    throw new UserFacingError("Não foi possível ler os dados deste PDF. Verifique se o arquivo é uma apólice legível.", 422);
   }
 }
 

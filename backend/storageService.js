@@ -37,9 +37,9 @@ export async function uploadFileToStorage(supabase, organizationId, fileName, fi
   if (encryptionKey) {
     payloadBuffer = encryptBuffer(fileBuffer, encryptionKey);
     isEncrypted = true;
-    console.log(`[Storage] Arquivo "${sanitizedFileName}" criptografado com sucesso (AES-256-GCM / SNM1) antes do upload.`);
+    console.log(`[Storage] Arquivo ${storagePath} criptografado (AES-256-GCM / SNM1) antes do upload.`);
   } else {
-    console.warn(`[Storage] ATENÇÃO: STORAGE_ENCRYPTION_KEY não configurada. Arquivo "${sanitizedFileName}" salvo em texto claro.`);
+    console.warn(`[Storage] ATENÇÃO: STORAGE_ENCRYPTION_KEY não configurada. Arquivo ${storagePath} salvo em texto claro.`);
   }
 
   try {
@@ -55,7 +55,7 @@ export async function uploadFileToStorage(supabase, organizationId, fileName, fi
     console.log(`[Storage] Upload concluído com sucesso: ${storagePath} (Criptografado: ${isEncrypted})`);
     return storagePath;
   } catch (error) {
-    console.error(`[Storage] Erro ao fazer upload de ${fileName}:`, error.message);
+    console.error(`[Storage] Erro ao fazer upload de ${storagePath}:`, error.message);
     throw new Error(`Falha no upload para o Supabase Storage: ${error.message}`);
   }
 }

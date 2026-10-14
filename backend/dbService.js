@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { encryptText, decryptText, generateBlindIndex, getEncryptionKeys, protectExtractedData, revealExtractedData } from "./cryptoService.js";
+import { UserFacingError } from "./errors.js";
 
 /**
  * Inicializa o cliente do Supabase com a chave de Service Role (bypass RLS).
@@ -146,7 +147,7 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
     const endDate = extractedData.apolice.fim_vigencia;
 
     if (!startDate || !endDate) {
-      throw new Error("Não foi possível identificar a vigência (início e fim) no PDF. Verifique se o arquivo é uma apólice legível.");
+      throw new UserFacingError("Não foi possível identificar a vigência (início e fim) no PDF. Verifique se o arquivo é uma apólice legível.", 422);
     }
 
     const { data: policy, error: polError } = await supabase
@@ -200,7 +201,8 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
     console.log(`Sucesso ao salvar apólice ${policyNumber} (Org: ${organizationId})`);
     return { success: true, policyId: policy.id };
   } catch (error) {
-    console.error(`Erro ao salvar dados da apólice (Storage Path: ${storagePath}):`, error);
+    // Só message/code: o objeto de erro do Postgres traz a linha recusada (details), com dados do segurado
+    console.error(`Erro ao salvar dados da apólice (Storage Path: ${storagePath}):`, error.code || "", error.message);
     throw error;
   }
 }
@@ -290,7 +292,7 @@ export async function seedSuperAdmin(supabase) {
     }
 
     if (!existingProfile) {
-      console.log(`SuperAdmin ${superAdminEmail} não encontrado no profiles. Verificando no Auth...`);
+      console.log("SuperAdmin não encontrado no profiles. Verificando no Auth...");
 
       // Listar usuários para encontrar se já existe no Auth
       const { data: listData, error: listError } = await supabase.auth.admin.listUsers();
@@ -351,7 +353,7 @@ export async function seedSuperAdmin(supabase) {
               organization_id: null,
               is_active: true
             });
-          console.log(`SuperAdmin ${superAdminEmail} criado com sucesso.`);
+          console.log("SuperAdmin criado com sucesso.");
         }
       }
     } else {
@@ -361,7 +363,7 @@ export async function seedSuperAdmin(supabase) {
         .update({ role: "superadmin", organization_id: null, is_active: true })
         .eq("id", existingProfile.id);
 
-      console.log(`SuperAdmin ${superAdminEmail} verificado e atualizado.`);
+      console.log("SuperAdmin verificado e atualizado.");
     }
   } catch (err) {
     console.error("Erro inesperado no seed do superadmin:", err.message);
@@ -609,10 +611,10 @@ export async function linkEndorsementToPolicy(supabase, endorsementId, policyId,
     .maybeSingle();
 
   if (endErr || !endorsement) {
-    throw new Error("Endosso não encontrado na sua organização.");
+    throw new UserFacingError("Endosso não encontrado na sua organização.", 404);
   }
   if (endorsement.status !== "pending") {
-    throw new Error("Este endosso não está pendente e não pode ser vinculado manualmente.");
+    throw new UserFacingError("Este endosso não está pendente e não pode ser vinculado manualmente.", 409);
   }
 
   // Verificar que a apólice pertence à org
@@ -624,7 +626,7 @@ export async function linkEndorsementToPolicy(supabase, endorsementId, policyId,
     .maybeSingle();
 
   if (polErr || !policy) {
-    throw new Error("Apólice não encontrada na sua organização.");
+    throw new UserFacingError("Apólice não encontrada na sua organização.", 404);
   }
 
   // Aplicar as alterações do endosso
@@ -815,7 +817,7 @@ export async function anonymizePolicy(supabase, policyId, organizationId, delete
     .maybeSingle();
 
   if (fetchErr || !policy) {
-    throw new Error("Apólice não encontrada ou acesso negado.");
+    throw new UserFacingError("Apólice não encontrada ou acesso negado.", 404);
   }
 
   // 2. Excluir o arquivo PDF principal do Storage

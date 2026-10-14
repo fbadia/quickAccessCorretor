@@ -5,6 +5,9 @@
  *   - clients.name, clients.cpf_cnpj (+ cpf_bidx)
  *   - vehicles.plate (+ plate_bidx)
  *   - policies.raw_extracted_data e endorsements.raw_extracted_data (campos pessoais do JSON)
+ *   - nomes de arquivo no Storage: PDFs antigos usavam o nome original (ex.
+ *     "Apolice-Fulano-ABC1D23-Porto.pdf"), que expõe nome e placa no bucket e em
+ *     storage_path. São renomeados para {orgId}/{file_hash}.pdf (ou legacy-{id}.pdf).
  *
  * Idempotente: valores já cifrados (enc:v1:) e valores anonimizados são ignorados, então pode
  * ser executado mais de uma vez com segurança.
@@ -112,6 +115,44 @@ async function backfillRawExtracted(supabase, table, { dbKey }) {
   return { table: `${table}.raw_extracted_data`, updateTable: table, total: rows.length, updates };
 }
 
+// Caminho já no formato sem dados pessoais: {orgId}/{sha256}.pdf ou {orgId}/legacy-{uuid}.pdf
+const SAFE_STORAGE_NAME = /^([0-9a-f]{64}|legacy-[0-9a-f-]{36})\.pdf$/;
+
+function planStorageRenames(rows, table) {
+  const updates = [];
+  for (const row of rows) {
+    if (!row.storage_path) continue;
+    const [orgFolder, ...rest] = row.storage_path.split("/");
+    const name = rest.join("/");
+    if (SAFE_STORAGE_NAME.test(name)) continue;
+    const target = `${orgFolder}/${row.file_hash ? row.file_hash : `legacy-${row.id}`}.pdf`;
+    updates.push({ id: row.id, from: row.storage_path, to: target });
+  }
+  return { table: `${table}.storage_path (renomear)`, renameTable: table, total: rows.length, updates };
+}
+
+async function applyRenames(supabase, plan, stats) {
+  if (!APPLY) return;
+  for (const { id, from, to } of plan.updates) {
+    const { error: moveErr } = await supabase.storage.from("policies").move(from, to);
+    // "not found": arquivo já ausente no bucket — só corrige a referência no banco
+    if (moveErr && !/not.?found/i.test(moveErr.message)) {
+      stats.errors++;
+      console.error(`  ✗ ${plan.renameTable} ${id}: falha ao renomear no Storage (${moveErr.message})`);
+      continue;
+    }
+    const { error: dbErr } = await supabase.from(plan.renameTable).update({ storage_path: to }).eq("id", id);
+    if (dbErr) {
+      // Desfaz o move para o banco não apontar para um arquivo inexistente
+      if (!moveErr) await supabase.storage.from("policies").move(to, from);
+      stats.errors++;
+      console.error(`  ✗ ${plan.renameTable} ${id}: falha ao atualizar storage_path (${dbErr.message})`);
+    } else {
+      stats.written++;
+    }
+  }
+}
+
 async function main() {
   // Exige as três chaves: um backfill parcial deixaria dados sem blind index
   assertEncryptionConfig(true);
@@ -125,15 +166,18 @@ async function main() {
     await backfillVehicles(supabase, keys),
     await backfillRawExtracted(supabase, "policies", keys),
     await backfillRawExtracted(supabase, "endorsements", keys),
+    planStorageRenames(await fetchAll(supabase, "policies", "id, storage_path, file_hash"), "policies"),
+    planStorageRenames(await fetchAll(supabase, "endorsements", "id, storage_path, file_hash"), "endorsements"),
   ];
 
   let totalErrors = 0;
   for (const plan of plans) {
     const stats = { written: 0, errors: 0 };
-    await applyUpdates(supabase, plan.updateTable || plan.table, plan.updates, stats);
+    if (plan.renameTable) await applyRenames(supabase, plan, stats);
+    else await applyUpdates(supabase, plan.updateTable || plan.table, plan.updates, stats);
     totalErrors += stats.errors;
     const result = APPLY ? ` | gravados: ${stats.written} | erros: ${stats.errors}` : "";
-    console.log(`${plan.table.padEnd(32)} registros: ${String(plan.total).padStart(5)} | a cifrar: ${String(plan.updates.length).padStart(5)}${result}`);
+    console.log(`${plan.table.padEnd(38)} registros: ${String(plan.total).padStart(5)} | a alterar: ${String(plan.updates.length).padStart(5)}${result}`);
   }
 
   if (!APPLY) console.log("\nNada foi gravado. Rode com --apply para aplicar.");

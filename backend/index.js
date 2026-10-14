@@ -19,6 +19,7 @@ import {
 } from "./dbService.js";
 import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage, deleteFileFromStorage } from "./storageService.js";
 import { assertEncryptionConfig, revealExtractedData, getEncryptionKeys } from "./cryptoService.js";
+import { toHttpError } from "./errors.js";
 
 dotenv.config();
 
@@ -278,7 +279,7 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
       return res.status(400).json({ error: `Erro ao associar perfil do administrador: ${profileError.message}` });
     }
 
-    console.log(`[SuperAdmin] Organização "${name}" criada. Admin: ${adminEmail}`);
+    console.log(`[SuperAdmin] Organização ${createdOrgId} criada com administrador ${createdUserId}.`);
     res.status(201).json({ message: "Organização e Administrador criados com sucesso.", organization: org });
   } catch (err) {
     console.error("Erro ao criar organização com admin:", err.message);
@@ -615,7 +616,7 @@ app.post("/superadmin/users", authenticate, requireSuperAdmin, async (req, res) 
       throw profError;
     }
 
-    console.log(`[SuperAdmin] Usuário ${email} criado na org ${organization_id} com role ${role}.`);
+    console.log(`[SuperAdmin] Usuário ${newUser.user.id} criado na org ${organization_id} com role ${role}.`);
     res.status(201).json({
       message: "Usuário criado com sucesso.",
       user: { id: newUser.user.id, email: email.trim(), name: name.trim(), role }
@@ -918,10 +919,10 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
   let storagePath = null;
 
   try {
-    console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
-
-    // 1. Calcular hash SHA-256
+    // 1. Calcular hash SHA-256 (identifica o arquivo nos logs: o nome original costuma
+    //    conter nome do segurado e placa, ex. "Apolice-Fulano-ABC1D23-Porto.pdf")
     const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
+    console.log(`[Upload] Processando arquivo ${fileHash.slice(0, 16)} para org: ${orgId}`);
 
     // 2. Verificar duplicata em apólices
     const { data: existingPolicy, error: findPolicyError } = await supabase
@@ -964,10 +965,10 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
     //    (créditos, cota, PDF ilegível), nenhum arquivo órfão fica no bucket.
     const extractedData = await extractDocumentData(file.buffer, process.env.GEMINI_API_KEY);
 
-    // 4. Upload para o Supabase Storage. O prefixo do hash torna o caminho único:
-    //    PDFs diferentes com o mesmo nome não se sobrescrevem (upsert), e a limpeza
-    //    em caso de erro nunca apaga o arquivo de outra apólice.
-    storagePath = await uploadFileToStorage(supabase, orgId, `${fileHash.slice(0, 16)}_${fileName}`, file.buffer);
+    // 4. Upload para o Supabase Storage como {orgId}/{hash}.pdf: o caminho é único (PDFs
+    //    diferentes nunca se sobrescrevem e a limpeza em caso de erro nunca apaga o arquivo de
+    //    outra apólice) e não carrega o nome original, que costuma conter dados pessoais.
+    storagePath = await uploadFileToStorage(supabase, orgId, `${fileHash}.pdf`, file.buffer);
 
     let responsePayload;
 
@@ -1015,7 +1016,7 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
     }
 
   } catch (err) {
-    console.error(`[Upload] Erro ao processar arquivo ${fileName}:`, err.message);
+    console.error(`[Upload] Erro ao processar arquivo de org ${orgId}:`, err.message);
 
     if (storagePath) {
       await removeUnreferencedUpload(storagePath);
@@ -1026,7 +1027,8 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
       .update({ last_sync_at: new Date().toISOString(), last_sync_status: "error" })
       .eq("id", orgId);
 
-    res.status(500).json({ error: `Erro ao processar ${fileName}: ${err.message}` });
+    const { status, message } = toHttpError(err, "Erro inesperado ao processar o arquivo. Tente novamente ou contate o suporte.");
+    res.status(status).json({ error: `Erro ao processar ${fileName}: ${message}` });
   }
 });
 
@@ -1068,7 +1070,8 @@ app.patch("/api/endorsements/:id/link", authenticate, requireOrgAdmin, async (re
     res.json({ message: "Endosso vinculado e aplicado com sucesso." });
   } catch (err) {
     console.error("Erro ao vincular endosso:", err.message);
-    res.status(400).json({ error: err.message });
+    const { status, message } = toHttpError(err, "Erro ao vincular o endosso. Tente novamente.");
+    res.status(status).json({ error: message });
   }
 });
 
@@ -1094,7 +1097,7 @@ app.get("/api/endorsements/:id/download", authenticate, async (req, res) => {
     if (endorsementError || !endorsement) return res.status(404).json({ error: "Endosso não encontrado." });
     if (!endorsement.storage_path) return res.status(404).json({ error: "Endosso sem arquivo PDF associado." });
 
-    console.log(`[PDF Endosso] Usuário ${req.user.email} → baixando: ${endorsement.storage_path}`);
+    console.log(`[PDF Endosso] Usuário ${req.user.id} → baixando: ${endorsement.storage_path}`);
     const pdfBuffer = await downloadFileFromStorage(supabase, endorsement.storage_path);
     const safeFileName = `endosso-${endorsement.endorsement_number || endorsementId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
@@ -1135,7 +1138,7 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
     if (policyError || !policy) return res.status(404).json({ error: "Apólice não encontrada." });
     if (!policy.storage_path) return res.status(404).json({ error: "Apólice sem arquivo PDF associado." });
 
-    console.log(`[PDF] Usuário ${req.user.email} → baixando do Storage: ${policy.storage_path}`);
+    console.log(`[PDF] Usuário ${req.user.id} → baixando do Storage: ${policy.storage_path}`);
     const pdfBuffer = await downloadFileFromStorage(supabase, policy.storage_path);
     const safeFileName = `apolice-${policy.policy_number || policyId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
@@ -1168,7 +1171,8 @@ app.delete("/api/policies/:policyId", authenticate, requireOrgAdmin, async (req,
     res.json(result);
   } catch (err) {
     console.error(`[LGPD] Erro ao anonimizar apólice ${policyId}:`, err.message);
-    res.status(400).json({ error: err.message });
+    const { status, message } = toHttpError(err, "Erro ao anonimizar a apólice. Tente novamente: a operação pode ser repetida com segurança.");
+    res.status(status).json({ error: message });
   }
 });
 
