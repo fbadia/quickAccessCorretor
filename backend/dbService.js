@@ -145,6 +145,10 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
     const startDate = extractedData.apolice.inicio_vigencia;
     const endDate = extractedData.apolice.fim_vigencia;
 
+    if (!startDate || !endDate) {
+      throw new Error("Não foi possível identificar a vigência (início e fim) no PDF. Verifique se o arquivo é uma apólice legível.");
+    }
+
     const { data: policy, error: polError } = await supabase
       .from("policies")
       .upsert(

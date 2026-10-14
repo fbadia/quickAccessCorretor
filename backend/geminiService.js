@@ -7,7 +7,7 @@ const nullableInt = { type: SchemaType.INTEGER, nullable: true };
 /**
  * Schema fechado (Structured Outputs) para apólices e endossos — ADR-007 / Story 1.2.
  * Os dois formatos são unificados num único objeto porque o responseSchema do Gemini
- * não suporta anyOf; campos do outro tipo de documento vêm ausentes ou null.
+ * não suporta anyOf; campos do outro tipo de documento vêm null.
  */
 export const DOCUMENT_RESPONSE_SCHEMA = {
   type: SchemaType.OBJECT,
@@ -18,16 +18,19 @@ export const DOCUMENT_RESPONSE_SCHEMA = {
       type: SchemaType.OBJECT,
       nullable: true,
       properties: { nome: nullableString, cpf_cnpj: nullableString },
+      required: ["nome", "cpf_cnpj"],
     },
     apolice: {
       type: SchemaType.OBJECT,
       nullable: true,
       properties: { numero: nullableString, inicio_vigencia: nullableDate, fim_vigencia: nullableDate },
+      required: ["numero", "inicio_vigencia", "fim_vigencia"],
     },
     veiculo: {
       type: SchemaType.OBJECT,
       nullable: true,
       properties: { placa: nullableString, marca_modelo: nullableString, ano: nullableInt },
+      required: ["placa", "marca_modelo", "ano"],
     },
     policy_number: nullableString,
     endorsement_number: nullableString,
@@ -50,9 +53,16 @@ export const DOCUMENT_RESPONSE_SCHEMA = {
         start_date: nullableDate,
         end_date: nullableDate,
       },
+      required: ["insured_name", "cpf_cnpj", "plate", "brand_model", "year", "start_date", "end_date"],
     },
   },
-  required: ["document_type"],
+  // Todos os campos são obrigatórios (aceitando null): com campos opcionais o Gemini
+  // tende a omiti-los e devolver só document_type + nome, o que gerava apólices
+  // "SEM-NUMERO" sem vigência.
+  required: [
+    "document_type", "seguradora", "segurado", "apolice", "veiculo",
+    "policy_number", "endorsement_number", "endorsement_type", "issued_at", "changes",
+  ],
 };
 
 /**
