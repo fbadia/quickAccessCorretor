@@ -7,7 +7,9 @@ import {
   encryptText,
   decryptText,
   generateBlindIndex,
-  parseKey
+  parseKey,
+  protectExtractedData,
+  revealExtractedData
 } from "./cryptoService.js";
 
 console.log("=== INICIANDO TESTES DO CRYPTO SERVICE (LGPD / ADR-007) ===");
@@ -88,6 +90,27 @@ const cpfBidx1 = generateBlindIndex("123.456.789-00", hmacKey);
 const cpfBidx2 = generateBlindIndex("12345678900", hmacKey);
 assert.strictEqual(cpfBidx1, cpfBidx2, "Blind index de CPF formatado e limpo devem coincidir");
 console.log("✅ Blind indexing determinístico validado!");
+
+// Teste 6: PII dentro do JSON extraído (raw_extracted_data)
+console.log("\n[6] Testando proteção de PII no raw_extracted_data...");
+const extracted = {
+  document_type: "policy",
+  seguradora: "Porto Seguro",
+  segurado: { nome: "Fulano de Tal", cpf_cnpj: "123.456.789-00" },
+  apolice: { numero: "ABC123", inicio_vigencia: "2026-01-01", fim_vigencia: "2027-01-01" },
+  veiculo: { placa: "ABC1D23", marca_modelo: "JEEP", ano: 2022 },
+  changes: { insured_name: null, cpf_cnpj: "", plate: "XYZ9K87" }
+};
+const protectedData = protectExtractedData(extracted, testKey);
+const serialized = JSON.stringify(protectedData);
+assert.ok(!serialized.includes("Fulano") && !serialized.includes("123.456.789-00") && !serialized.includes("ABC1D23") && !serialized.includes("XYZ9K87"), "Nenhuma PII pode aparecer em texto claro");
+assert.strictEqual(protectedData.apolice.numero, "ABC123", "Campos não pessoais permanecem legíveis");
+assert.strictEqual(protectedData.changes.insured_name, null, "Nulos permanecem nulos");
+assert.strictEqual(extracted.segurado.nome, "Fulano de Tal", "O objeto original não pode ser alterado");
+assert.deepStrictEqual(protectExtractedData(protectedData, testKey), protectedData, "Cifrar de novo não deve cifrar em dobro");
+assert.deepStrictEqual(revealExtractedData(protectedData, testKey), extracted, "Revelar deve devolver o objeto original");
+assert.deepStrictEqual(revealExtractedData(extracted, testKey), extracted, "Dados legados em claro passam inalterados");
+console.log("✅ Proteção de PII no raw_extracted_data validada!");
 
 console.log("\n========================================================");
 console.log("🎉 TODOS OS TESTES DO CRYPTO SERVICE PASSARAM COM SUCESSO!");

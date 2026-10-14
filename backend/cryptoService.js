@@ -197,6 +197,46 @@ export function generateBlindIndex(text, hmacKey) {
   return crypto.createHmac("sha256", parseKey(hmacKey)).update(normalized).digest("hex");
 }
 
+// Campos com dados pessoais dentro do JSON extraído pelo Gemini (raw_extracted_data).
+const EXTRACTED_PII_FIELDS = [
+  ["segurado", "nome"],
+  ["segurado", "cpf_cnpj"],
+  ["veiculo", "placa"],
+  ["changes", "insured_name"],
+  ["changes", "cpf_cnpj"],
+  ["changes", "plate"],
+];
+
+function mapExtractedPii(data, fn) {
+  if (!data || typeof data !== "object") return data;
+  const copy = structuredClone(data);
+  for (const [group, field] of EXTRACTED_PII_FIELDS) {
+    const value = copy[group]?.[field];
+    if (value !== null && value !== undefined && value !== "") {
+      copy[group][field] = fn(value);
+    }
+  }
+  return copy;
+}
+
+/**
+ * Cifra os campos pessoais do JSON extraído antes de gravá-lo em raw_extracted_data,
+ * para que a coluna JSONB não exponha nome, CPF/CNPJ e placa num dump (ADR-007).
+ * Valores já cifrados não são cifrados de novo.
+ */
+export function protectExtractedData(data, dbKey) {
+  if (!dbKey) return data;
+  return mapExtractedPii(data, v => (typeof v === "string" && v.startsWith(TEXT_PREFIX) ? v : encryptText(v, dbKey)));
+}
+
+/**
+ * Inverso de protectExtractedData. Valores legados em texto claro passam inalterados.
+ */
+export function revealExtractedData(data, dbKey) {
+  if (!dbKey) return data;
+  return mapExtractedPii(data, v => decryptText(v, dbKey));
+}
+
 /**
  * Lê as chaves de criptografia do ambiente. Cada uma tem um único propósito:
  * a chave HMAC nunca reaproveita a chave AES do banco.

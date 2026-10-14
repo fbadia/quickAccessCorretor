@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { encryptText, decryptText, generateBlindIndex, getEncryptionKeys } from "./cryptoService.js";
+import { encryptText, decryptText, generateBlindIndex, getEncryptionKeys, protectExtractedData, revealExtractedData } from "./cryptoService.js";
 
 /**
  * Inicializa o cliente do Supabase com a chave de Service Role (bypass RLS).
@@ -160,7 +160,7 @@ export async function savePolicyData(supabase, storagePath, extractedData, organ
           end_date: endDate,
           storage_path: storagePath,
           file_hash: fileHash,
-          raw_extracted_data: extractedData,
+          raw_extracted_data: protectExtractedData(extractedData, dbKey),
           organization_id: organizationId
         },
         { onConflict: "storage_path" }
@@ -455,7 +455,7 @@ async function applyEndorsementChanges(supabase, policyId, endorsementType, chan
 
   // Para todos os tipos: atualizar raw_extracted_data e datas da apólice se fornecidas
   const policyUpdate = {
-    raw_extracted_data: rawExtractedData
+    raw_extracted_data: protectExtractedData(rawExtractedData, dbKey)
   };
   if (changes.start_date) policyUpdate.start_date = changes.start_date;
   if (changes.end_date) policyUpdate.end_date = changes.end_date;
@@ -523,7 +523,7 @@ export async function saveEndorsementData(supabase, storagePath, extractedData, 
         expires_at: null,
         storage_path: storagePath,
         file_hash: fileHash,
-        raw_extracted_data: extractedData
+        raw_extracted_data: protectExtractedData(extractedData, getEncryptionKeys().dbKey)
       })
       .select("id")
       .single();
@@ -551,7 +551,7 @@ export async function saveEndorsementData(supabase, storagePath, extractedData, 
         expires_at: expiresAt,
         storage_path: storagePath,
         file_hash: fileHash,
-        raw_extracted_data: extractedData
+        raw_extracted_data: protectExtractedData(extractedData, getEncryptionKeys().dbKey)
       })
       .select("id")
       .single();
@@ -628,8 +628,10 @@ export async function linkEndorsementToPolicy(supabase, endorsementId, policyId,
   }
 
   // Aplicar as alterações do endosso
-  const changes = endorsement.raw_extracted_data?.changes || {};
-  await applyEndorsementChanges(supabase, policyId, endorsement.endorsement_type, changes, endorsement.raw_extracted_data);
+  // Decifra antes de aplicar: senão a PII já cifrada seria cifrada de novo nas tabelas de negócio
+  const rawExtractedData = revealExtractedData(endorsement.raw_extracted_data, getEncryptionKeys().dbKey);
+  const changes = rawExtractedData?.changes || {};
+  await applyEndorsementChanges(supabase, policyId, endorsement.endorsement_type, changes, rawExtractedData);
 
   // Atualizar o endosso para "applied"
   const { error: updateErr } = await supabase

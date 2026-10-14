@@ -18,7 +18,7 @@ import {
   anonymizePolicy
 } from "./dbService.js";
 import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage, deleteFileFromStorage } from "./storageService.js";
-import { assertEncryptionConfig } from "./cryptoService.js";
+import { assertEncryptionConfig, revealExtractedData, getEncryptionKeys } from "./cryptoService.js";
 
 dotenv.config();
 
@@ -938,7 +938,7 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
         alreadyExists: true,
         document_type: "policy",
         policyId: existingPolicy.id,
-        data: existingPolicy.raw_extracted_data
+        data: revealExtractedData(existingPolicy.raw_extracted_data, getEncryptionKeys().dbKey)
       });
     }
 
