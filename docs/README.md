@@ -34,3 +34,4 @@ Decisões técnicas significativas registradas em ordem cronológica.
 | [Roadmap](./Gestao/roadmap.md) | Visão de produto, épicos e entregas planejadas |
 | [Sprint 0](./Gestao/sprints/sprint-0.md) | Infra, containerização e deploy ZeroServer |
 | [Sprint 1](./Gestao/sprints/sprint-1.md) | Segurança de Dados e Conformidade LGPD (ADR-007) |
+| [Sprint 2](./Gestao/sprints/sprint-2.md) | Qualidade, Confiabilidade e Alertas de Vencimento (proposta) |

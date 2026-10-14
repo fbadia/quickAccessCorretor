@@ -1,7 +1,7 @@
 # Roadmap — SeguroNaMão
 
 > Visão de produto e entregas planejadas. Atualizado ao final de cada sprint.
-> **Última atualização:** 2026-08-06
+> **Última atualização:** 2026-10-14
 
 ---
 
@@ -28,9 +28,10 @@ Tornar o SeguroNaMão a ferramenta de referência para corretores de seguros aut
 | Gestão de usuários e organizações | ✅ Pronto |
 | PWA (instalável no celular) | ✅ Pronto |
 | Containerização Docker | ✅ Pronto |
-| Deploy ZeroServer | 🔄 Em andamento |
-| CI/CD automatizado (GitHub Actions) | 🔄 Em andamento |
-| CORS atualizado para ZeroServer URL | ⏳ Pendente |
+| Deploy ZeroServer | ✅ Pronto (homologação separada: Sprint 2) |
+| CI/CD automatizado (GitHub Actions) | ✅ Pronto (testes no CI: Sprint 2) |
+| CORS atualizado para ZeroServer URL | ✅ Pronto |
+| Criptografia de dados pessoais e LGPD (ADR-007) | ✅ Pronto (Sprint 1) |
 
 ---
 
@@ -67,6 +68,8 @@ Tornar o SeguroNaMão a ferramenta de referência para corretores de seguros aut
 | Alertas de saúde do sistema | Média | ⏳ |
 | Rate limiting nas rotas de upload | Alta | ⏳ |
 | Logging estruturado com nível de log | Média | ⏳ |
+| Performance do upload em lote: processamento paralelo / fila assíncrona (hoje ~5 s por apólice, sequencial) | Média | ⏳ |
+| ADR: banco de dados no ZeroServer (PostgreSQL em container vs. Supabase gerenciado) | Baixa | ⏳ |
 
 ---
 

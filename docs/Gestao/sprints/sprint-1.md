@@ -1,7 +1,7 @@
 # Sprint 1 — Segurança de Dados e Conformidade LGPD
 
-**Período:** 2026-09-04 → 2026-10-14 (desenvolvimento concluído; aguardando validação em homologação)  
-**Status:** ✅ Gates 1 e 2 concluídos · Gate 3: auditoria ✅, busca sem regressão ✅, deploy em homologação ⏳  
+**Período:** 2026-09-04 → 2026-10-14  
+**Status:** ✅ Concluída — Gates 1, 2 e 3 aprovados  
 **Objetivo:** Implementar a arquitetura de segurança e conformidade LGPD aprovada na ADR-007, introduzindo criptografia em repouso no Storage de apólices, criptografia em nível de aplicação (ALE) para dados de clientes/veículos no banco com preservação da busca instantânea no frontend, blindagem de cache PWA e rotina de direito ao esquecimento.
 
 **Épico relacionado:** [Épico — Segurança e Conformidade LGPD](../../ADRs/ADR-007-conformidade-lgpd-criptografia-dados.md)
@@ -122,7 +122,7 @@ A [ADR-007](../../ADRs/ADR-007-conformidade-lgpd-criptografia-dados.md) foi apro
 | **T1.15** | Script de backfill dos dados legados (`encryptLegacyData.js`) — aplicado | `developer-agent` | ✅ Concluído |
 | **T1.16** | Auditoria de segurança do PR e correção dos achados pré-existentes | `security-agent` | ✅ Concluído |
 | **T1.17** | Atualização do `AGENTS.md` e documentação | `documentation-agent` | ✅ Concluído |
-| **T1.18** | Merge na `develop` e validação do deploy em homologação | `devops-agent` | ⏳ Pendente |
+| **T1.18** | Merge na `develop` e validação do deploy em homologação | `devops-agent` | ✅ Concluído |
 
 ---
 
@@ -133,7 +133,8 @@ A [ADR-007](../../ADRs/ADR-007-conformidade-lgpd-criptografia-dados.md) foi apro
 * **Gate 3 — Auditoria e Deploy:** Security audit aprovada, sem regressão na busca do frontend e deploy validado em homologação.
   * Security audit: ✅ aprovada em 2026-10-13 (nenhuma vulnerabilidade alta/média nas mudanças; 3 achados pré-existentes corrigidos — ver abaixo)
   * Busca sem regressão: ✅ validada localmente em 2026-10-13
-  * Deploy em homologação: ⏳ pendente (merge do [PR #2](https://github.com/fbadia/quickAccessCorretor/pull/2) na `develop`)
+  * Deploy: ✅ validado em 2026-10-14 — [PR #2](https://github.com/fbadia/quickAccessCorretor/pull/2) mergeado; deploy concluído após trocar o `ZS_TOKEN` (sessão expirada) por uma API key; `/health` ok, backend em modo produção (que exige as três chaves), login, listagem e visualização de cliente e apólice sem erros (dados decifrados — chaves locais e do GitHub conferem)
+  * ⚠️ Constatado no deploy: `develop` e `main` publicam no **mesmo app** do ZeroServer (`seguronamao`) e usam o mesmo Supabase — tratado na Story 2.1 da [Sprint 2](./sprint-2.md)
 
 ---
 
@@ -193,7 +194,8 @@ Nenhuma vulnerabilidade de severidade alta ou média nas mudanças do PR. Três 
 - **Banco de testes = banco de produção:** o ambiente local aponta para o mesmo Supabase de produção. O `AGENTS.md` pede migrations testadas no banco dev antes de produção.
 
 **Itens para a próxima sprint:**
-- Merge do PR #2 e validação em homologação (T1.18), incluindo a confirmação de que as chaves do `.env` local são as mesmas dos secrets do GitHub.
+- ~~Merge do PR #2 e validação em homologação (T1.18)~~ — concluído em 2026-10-14.
+- Separar homologação de produção no ZeroServer (hoje `develop` e `main` publicam no mesmo app).
 - Supabase separado para desenvolvimento/homologação.
 - Backend falhar ao subir quando o Supabase não inicializar.
 - Testes automatizados de API (upload, listagem, download e anonimização por papel: admin, corretor, outra organização).
