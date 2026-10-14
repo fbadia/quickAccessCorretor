@@ -19,6 +19,7 @@
  * Nunca imprime dados pessoais — apenas IDs e contagens.
  */
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import { getSupabaseClient } from "./dbService.js";
 import {
   assertEncryptionConfig,
@@ -28,7 +29,9 @@ import {
   protectExtractedData,
 } from "./cryptoService.js";
 
-dotenv.config();
+// Lê o .env ao lado deste arquivo, independentemente da pasta de onde o processo foi iniciado.
+// Em container não há .env e as variáveis vêm do ambiente (dotenv ignora o arquivo ausente).
+dotenv.config({ path: fileURLToPath(new URL(".env", import.meta.url)) });
 
 const APPLY = process.argv.includes("--apply");
 const PAGE_SIZE = 500;

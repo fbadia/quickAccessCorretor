@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import multer from "multer";
 import crypto from "crypto";
 import { extractDocumentData } from "./geminiService.js";
@@ -21,7 +22,9 @@ import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderF
 import { assertEncryptionConfig, revealExtractedData, getEncryptionKeys } from "./cryptoService.js";
 import { toHttpError } from "./errors.js";
 
-dotenv.config();
+// Lê o .env ao lado deste arquivo, independentemente da pasta de onde o processo foi iniciado.
+// Em container não há .env e as variáveis vêm do ambiente (dotenv ignora o arquivo ausente).
+dotenv.config({ path: fileURLToPath(new URL(".env", import.meta.url)) });
 
 // Falha rápido: subir sem as chaves gravaria PII e PDFs em texto claro (ADR-007).
 try {
