@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import multer from "multer";
 import crypto from "crypto";
 import { extractDocumentData } from "./geminiService.js";
@@ -13,11 +14,25 @@ import {
   saveEndorsementData,
   getPendingEndorsements,
   linkEndorsementToPolicy,
-  runExpiredEndorsementsCleanup
+  runExpiredEndorsementsCleanup,
+  getDecryptedVehicles,
+  anonymizePolicy
 } from "./dbService.js";
 import { uploadFileToStorage, downloadFileFromStorage, deleteOrganizationFolderFromStorage, deleteFileFromStorage } from "./storageService.js";
+import { assertEncryptionConfig, revealExtractedData, getEncryptionKeys } from "./cryptoService.js";
+import { toHttpError } from "./errors.js";
 
-dotenv.config();
+// Lê o .env ao lado deste arquivo, independentemente da pasta de onde o processo foi iniciado.
+// Em container não há .env e as variáveis vêm do ambiente (dotenv ignora o arquivo ausente).
+dotenv.config({ path: fileURLToPath(new URL(".env", import.meta.url)) });
+
+// Falha rápido: subir sem as chaves gravaria PII e PDFs em texto claro (ADR-007).
+try {
+  assertEncryptionConfig(process.env.NODE_ENV === "production");
+} catch (error) {
+  console.error(`[Crypto] ${error.message}`);
+  process.exit(1);
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -267,7 +282,7 @@ app.post("/superadmin/organizations", authenticate, requireSuperAdmin, async (re
       return res.status(400).json({ error: `Erro ao associar perfil do administrador: ${profileError.message}` });
     }
 
-    console.log(`[SuperAdmin] Organização "${name}" criada. Admin: ${adminEmail}`);
+    console.log(`[SuperAdmin] Organização ${createdOrgId} criada com administrador ${createdUserId}.`);
     res.status(201).json({ message: "Organização e Administrador criados com sucesso.", organization: org });
   } catch (err) {
     console.error("Erro ao criar organização com admin:", err.message);
@@ -604,7 +619,7 @@ app.post("/superadmin/users", authenticate, requireSuperAdmin, async (req, res) 
       throw profError;
     }
 
-    console.log(`[SuperAdmin] Usuário ${email} criado na org ${organization_id} com role ${role}.`);
+    console.log(`[SuperAdmin] Usuário ${newUser.user.id} criado na org ${organization_id} com role ${role}.`);
     res.status(201).json({
       message: "Usuário criado com sucesso.",
       user: { id: newUser.user.id, email: email.trim(), name: name.trim(), role }
@@ -843,13 +858,55 @@ app.delete("/admin/users/:userId", authenticate, requireOrgAdmin, async (req, re
 });
 
 // ─────────────────────────────────────────────────────────────
-// ROTAS DE UPLOAD E PROCESSAMENTO DE APÓLICES
+// ROTAS DE APÓLICES E VEÍCULOS
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/vehicles — Lista veículos e apólices vigentes da organização com PII decifrada em memória (ADR-007 / LGPD).
+ */
+app.get("/api/vehicles", authenticate, async (req, res) => {
+  const orgId = req.profile.organization_id;
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não possui organização associada para visualizar apólices." });
+  }
+
+  try {
+    const vehicles = await getDecryptedVehicles(supabase, orgId);
+    res.json(vehicles);
+  } catch (err) {
+    console.error("Erro ao listar veículos decifrados:", err.message);
+    res.status(500).json({ error: "Erro ao obter veículos da organização." });
+  }
+});
 
 /**
  * POST /api/policies/upload — Upload e processamento imediato de apólices e endossos em PDF.
  * O sistema detecta automaticamente o tipo de documento via Gemini e roteia adequadamente.
  */
+/**
+ * Remove do Storage um PDF cujo processamento falhou depois do upload — desde que nenhuma
+ * apólice ou endosso já o referencie (uma gravação parcial no banco mantém o arquivo).
+ * Evita PDFs órfãos com dados pessoais no bucket (LGPD / ADR-007).
+ */
+async function removeUnreferencedUpload(storagePath) {
+  try {
+    const [{ count: policyRefs, error: polErr }, { count: endoRefs, error: endoErr }] = await Promise.all([
+      supabase.from("policies").select("id", { count: "exact", head: true }).eq("storage_path", storagePath),
+      supabase.from("endorsements").select("id", { count: "exact", head: true }).eq("storage_path", storagePath),
+    ]);
+    if (polErr || endoErr) throw polErr || endoErr;
+
+    if (policyRefs || endoRefs) {
+      console.warn(`[Upload] Arquivo ${storagePath} mantido: já referenciado no banco após falha parcial.`);
+      return;
+    }
+    await deleteFileFromStorage(supabase, storagePath);
+    console.log(`[Upload] Arquivo órfão removido do Storage após falha: ${storagePath}`);
+  } catch (cleanupErr) {
+    console.error(`[Upload] Não foi possível limpar ${storagePath} após falha:`, cleanupErr.message);
+  }
+}
+
 app.post("/api/policies/upload", authenticate, upload.single("file"), async (req, res) => {
   const orgId = req.profile.organization_id;
   if (!orgId) {
@@ -862,12 +919,13 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
   }
 
   const fileName = file.originalname;
+  let storagePath = null;
 
   try {
-    console.log(`[Upload] Processando upload do arquivo "${fileName}" para org: ${orgId}`);
-
-    // 1. Calcular hash SHA-256
+    // 1. Calcular hash SHA-256 (identifica o arquivo nos logs: o nome original costuma
+    //    conter nome do segurado e placa, ex. "Apolice-Fulano-ABC1D23-Porto.pdf")
     const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
+    console.log(`[Upload] Processando arquivo ${fileHash.slice(0, 16)} para org: ${orgId}`);
 
     // 2. Verificar duplicata em apólices
     const { data: existingPolicy, error: findPolicyError } = await supabase
@@ -884,7 +942,7 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
         alreadyExists: true,
         document_type: "policy",
         policyId: existingPolicy.id,
-        data: existingPolicy.raw_extracted_data
+        data: revealExtractedData(existingPolicy.raw_extracted_data, getEncryptionKeys().dbKey)
       });
     }
 
@@ -906,11 +964,14 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
       });
     }
 
-    // 3. Fazer upload para o Supabase Storage
-    const storagePath = await uploadFileToStorage(supabase, orgId, fileName, file.buffer);
-
-    // 4. Extrair dados via Gemini (detecta automaticamente o tipo)
+    // 3. Extrair dados via Gemini ANTES de gravar no Storage: se a extração falhar
+    //    (créditos, cota, PDF ilegível), nenhum arquivo órfão fica no bucket.
     const extractedData = await extractDocumentData(file.buffer, process.env.GEMINI_API_KEY);
+
+    // 4. Upload para o Supabase Storage como {orgId}/{hash}.pdf: o caminho é único (PDFs
+    //    diferentes nunca se sobrescrevem e a limpeza em caso de erro nunca apaga o arquivo de
+    //    outra apólice) e não carrega o nome original, que costuma conter dados pessoais.
+    storagePath = await uploadFileToStorage(supabase, orgId, `${fileHash}.pdf`, file.buffer);
 
     let responsePayload;
 
@@ -958,14 +1019,19 @@ app.post("/api/policies/upload", authenticate, upload.single("file"), async (req
     }
 
   } catch (err) {
-    console.error(`[Upload] Erro ao processar arquivo ${fileName}:`, err.message);
+    console.error(`[Upload] Erro ao processar arquivo de org ${orgId}:`, err.message);
+
+    if (storagePath) {
+      await removeUnreferencedUpload(storagePath);
+    }
 
     await supabase
       .from("organizations")
       .update({ last_sync_at: new Date().toISOString(), last_sync_status: "error" })
       .eq("id", orgId);
 
-    res.status(500).json({ error: `Erro ao processar ${fileName}: ${err.message}` });
+    const { status, message } = toHttpError(err, "Erro inesperado ao processar o arquivo. Tente novamente ou contate o suporte.");
+    res.status(status).json({ error: `Erro ao processar ${fileName}: ${message}` });
   }
 });
 
@@ -1007,7 +1073,8 @@ app.patch("/api/endorsements/:id/link", authenticate, requireOrgAdmin, async (re
     res.json({ message: "Endosso vinculado e aplicado com sucesso." });
   } catch (err) {
     console.error("Erro ao vincular endosso:", err.message);
-    res.status(400).json({ error: err.message });
+    const { status, message } = toHttpError(err, "Erro ao vincular o endosso. Tente novamente.");
+    res.status(status).json({ error: message });
   }
 });
 
@@ -1033,7 +1100,7 @@ app.get("/api/endorsements/:id/download", authenticate, async (req, res) => {
     if (endorsementError || !endorsement) return res.status(404).json({ error: "Endosso não encontrado." });
     if (!endorsement.storage_path) return res.status(404).json({ error: "Endosso sem arquivo PDF associado." });
 
-    console.log(`[PDF Endosso] Usuário ${req.user.email} → baixando: ${endorsement.storage_path}`);
+    console.log(`[PDF Endosso] Usuário ${req.user.id} → baixando: ${endorsement.storage_path}`);
     const pdfBuffer = await downloadFileFromStorage(supabase, endorsement.storage_path);
     const safeFileName = `endosso-${endorsement.endorsement_number || endorsementId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
@@ -1074,7 +1141,7 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
     if (policyError || !policy) return res.status(404).json({ error: "Apólice não encontrada." });
     if (!policy.storage_path) return res.status(404).json({ error: "Apólice sem arquivo PDF associado." });
 
-    console.log(`[PDF] Usuário ${req.user.email} → baixando do Storage: ${policy.storage_path}`);
+    console.log(`[PDF] Usuário ${req.user.id} → baixando do Storage: ${policy.storage_path}`);
     const pdfBuffer = await downloadFileFromStorage(supabase, policy.storage_path);
     const safeFileName = `apolice-${policy.policy_number || policyId}.pdf`.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 
@@ -1087,6 +1154,28 @@ app.get("/api/policies/:policyId/download", authenticate, async (req, res) => {
   } catch (err) {
     console.error("Erro ao baixar PDF:", err.message);
     return res.status(500).json({ error: "Erro ao obter o arquivo PDF." });
+  }
+});
+
+/**
+ * DELETE /api/policies/:policyId — Direito ao Esquecimento / Anonimização (Art. 18 LGPD).
+ * Restrito a administradores da organização. Exclui PDFs do Storage e anonimiza dados pessoais.
+ */
+app.delete("/api/policies/:policyId", authenticate, requireOrgAdmin, async (req, res) => {
+  const { policyId } = req.params;
+  const orgId = req.profile.organization_id;
+
+  if (!orgId) {
+    return res.status(403).json({ error: "SuperAdmin não pode executar anonimização direta em organizações." });
+  }
+
+  try {
+    const result = await anonymizePolicy(supabase, policyId, orgId, deleteFileFromStorage);
+    res.json(result);
+  } catch (err) {
+    console.error(`[LGPD] Erro ao anonimizar apólice ${policyId}:`, err.message);
+    const { status, message } = toHttpError(err, "Erro ao anonimizar a apólice. Tente novamente: a operação pode ser repetida com segurança.");
+    res.status(status).json({ error: message });
   }
 });
 

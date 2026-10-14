@@ -5,7 +5,7 @@ import {
   LogOut, Sun, Moon, X, Edit, Trash2, ChevronDown, ChevronUp, KeyRound
 } from "lucide-react";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
 
 // ─────────────────────────────────────────────────────────────
 // Hook para chamadas autenticadas ao backend

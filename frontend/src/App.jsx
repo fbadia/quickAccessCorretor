@@ -194,45 +194,76 @@ export default function App() {
     }
   };
 
-  // Buscar dados principais (veículos + apólices)
+  // Buscar dados principais (veículos + apólices decifrados via backend com ALE / LGPD)
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("vehicles")
-        .select(`
-          id,
-          plate,
-          brand_model,
-          year,
-          policy:policies (
-            id,
-            policy_number,
-            storage_path,
-            start_date,
-            end_date,
-            client:clients (
-              id,
-              name,
-              cpf_cnpj
-            ),
-            insurer:insurers (
-              id,
-              name,
-              assistance_phone,
-              assistance_whatsapp,
-              claims_phone,
-              claims_url
-            )
-          )
-        `)
-        .eq("is_current", true)
-        .eq("organization_id", profile.organization_id)  // defesa em profundidade além do RLS
-        .order("created_at", { ascending: false });
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
+      const token = session?.access_token;
 
-      if (error) throw error;
-      setVehicles(data || []);
-      setSearchResults(data ? data.slice(0, 10) : []);
+      let vehicleList = null;
+
+      // 1. Prioridade: Buscar via backend autenticado (com decifração em memória no servidor - ADR-007)
+      if (token) {
+        try {
+          const res = await fetch(`${backendUrl}/api/vehicles`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (!res.ok) {
+            // Backend respondeu com erro: não cair no Supabase direto, que só devolveria
+            // ciphertext ("enc:v1:...") e quebraria a busca.
+            throw new Error(`Backend retornou ${res.status} ao listar veículos.`);
+          }
+          vehicleList = await res.json();
+        } catch (apiErr) {
+          if (!(apiErr instanceof TypeError)) throw apiErr;
+          // TypeError = falha de rede (backend inacessível): segue para o fallback
+          console.warn("Backend indisponível, tentando fallback direto no Supabase:", apiErr.message);
+        }
+      }
+
+      // 2. Fallback direto no Supabase apenas se o backend estiver inacessível (dados legados em texto claro)
+      if (!vehicleList) {
+        const { data, error } = await supabase
+          .from("vehicles")
+          .select(`
+            id,
+            plate,
+            brand_model,
+            year,
+            policy:policies (
+              id,
+              policy_number,
+              storage_path,
+              start_date,
+              end_date,
+              client:clients (
+                id,
+                name,
+                cpf_cnpj
+              ),
+              insurer:insurers (
+                id,
+                name,
+                assistance_phone,
+                assistance_whatsapp,
+                claims_phone,
+                claims_url
+              )
+            )
+          `)
+          .eq("is_current", true)
+          .eq("organization_id", profile.organization_id)  // defesa em profundidade além do RLS
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+        vehicleList = data || [];
+      }
+
+      setVehicles(vehicleList || []);
+      setSearchResults(vehicleList ? vehicleList.slice(0, 10) : []);
     } catch (err) {
       console.error("Erro ao buscar apólices:", err.message);
       showToast("Erro ao sincronizar com o banco", "error");
@@ -244,7 +275,7 @@ export default function App() {
   // Buscar dados da área administrativa (via backend autenticado)
   const fetchAdminData = async () => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const token = session?.access_token;
 
       // 1. Buscar usuários da org via backend (escoped por org)
@@ -263,7 +294,7 @@ export default function App() {
   // Buscar endossos pendentes da org (aba Pendências)
   const fetchPendingEndorsements = async () => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const token = session?.access_token;
       const res = await fetch(`${backendUrl}/api/endorsements/pending`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -383,7 +414,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     if (!policyId || !session?.access_token) return;
     setPdfLoading(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const res = await fetch(`${backendUrl}/api/policies/${policyId}/download`, {
         headers: {
           Authorization: `Bearer ${session.access_token}`
@@ -466,7 +497,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     if (selectedFiles.length === 0) return;
     setUploading(true);
 
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+    const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
     const token = session?.access_token;
 
     const report = { policies: [], applied: [], pending: [] };
@@ -551,7 +582,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
     setInviteLoading(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users`, {
         method: "POST",
         headers: {
@@ -601,7 +632,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
 
     setSavingUser(true);
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const body = {
         name: editUserName.trim(),
         email: editUserEmail.trim(),
@@ -638,7 +669,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
   // Toggle de status do usuário (is_active)
   const toggleUserStatus = async (userId, currentStatus) => {
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
         method: "PATCH",
         headers: {
@@ -667,7 +698,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
     }
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
       const response = await fetch(`${backendUrl}/admin/users/${userId}`, {
         method: "DELETE",
         headers: {
@@ -1556,7 +1587,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                                   title="Ver PDF do endosso"
                                   onClick={async () => {
                                     try {
-                                      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                                      const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
                                       const token = session?.access_token;
                                       const res = await fetch(`${backendUrl}/api/endorsements/${e.id}/download`, {
                                         headers: { Authorization: `Bearer ${token}` }
@@ -1707,7 +1738,7 @@ Vigência: ${formatDate(p?.start_date)} até ${formatDate(p?.end_date)}`;
                       if (!v.policy?.id) return;
                       setLinkLoading(true);
                       try {
-                        const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+                        const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
                         const token = session?.access_token;
                         const res = await fetch(`${backendUrl}/api/endorsements/${linkingEndorsement.id}/link`, {
                           method: "PATCH",

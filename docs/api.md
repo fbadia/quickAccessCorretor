@@ -135,9 +135,10 @@ Upload e processamento de PDF (apólice ou endosso).
 **Fluxo interno:**
 1. Valida MIME type (`application/pdf`)
 2. Calcula SHA-256 e verifica duplicata
-3. Faz upload para Supabase Storage
-4. Envia para Gemini → detecta tipo + extrai dados
+3. Envia para Gemini → detecta tipo + extrai dados (antes do Storage: se falhar, nada é gravado)
+4. Faz upload cifrado para o Supabase Storage em `{orgId}/{sha256}.pdf` (sem o nome original, que pode conter dados pessoais)
 5. Salva no banco
+6. Em caso de erro após o upload, remove o PDF do Storage se nenhum registro o referenciar
 
 **Respostas:**
 
@@ -202,11 +203,59 @@ Download do PDF de um endosso (retorna o arquivo diretamente).
 
 #### `GET /api/policies/:policyId/download`
 
-Download do PDF de uma apólice (retorna o arquivo diretamente).
+Download do PDF de uma apólice (retorna o arquivo decifrado em memória diretamente).
 
-**Resposta `200`:** `Content-Type: application/pdf`
+**Resposta `200`:** `Content-Type: application/pdf`, `Cache-Control: private, no-store`
 
 ---
+
+#### `GET /api/vehicles`
+
+Lista todos os veículos e apólices vigentes da organização do usuário, com dados pessoais (Nome, CPF, Placa) decifrados em memória (ADR-007 / LGPD).
+
+**Resposta `200`:**
+```json
+[
+  {
+    "id": "uuid",
+    "plate": "ABC1D23",
+    "brand_model": "JEEP COMPASS",
+    "year": 2023,
+    "policy": {
+      "id": "uuid",
+      "policy_number": "POL12345",
+      "storage_path": "org-id/apolice.pdf",
+      "start_date": "2026-01-01",
+      "end_date": "2027-01-01",
+      "client": {
+        "id": "uuid",
+        "name": "Maria Silva",
+        "cpf_cnpj": "123.456.789-00"
+      },
+      "insurer": { ... }
+    }
+  }
+]
+```
+
+---
+
+#### `DELETE /api/policies/:policyId`
+
+Direito ao Esquecimento e Anonimização (Art. 18 LGPD). Exclui permanentemente os PDFs da apólice e endossos do Supabase Storage e anonimiza os dados cadastrais residuais.
+
+> Requer `role = admin`
+
+**Resposta `200`:**
+```json
+{
+  "success": true,
+  "message": "Apólice e dados pessoais anonimizados em conformidade com a LGPD."
+}
+```
+
+---
+
 
 ## Erros Comuns
 

@@ -1,4 +1,72 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { UserFacingError } from "./errors.js";
+
+const AI_UNAVAILABLE_MESSAGE = "O serviço de leitura de PDFs está indisponível no momento. Tente novamente em alguns minutos.";
+
+const nullableString = { type: SchemaType.STRING, nullable: true };
+const nullableDate = { type: SchemaType.STRING, format: "date", nullable: true };
+const nullableInt = { type: SchemaType.INTEGER, nullable: true };
+
+/**
+ * Schema fechado (Structured Outputs) para apólices e endossos — ADR-007 / Story 1.2.
+ * Os dois formatos são unificados num único objeto porque o responseSchema do Gemini
+ * não suporta anyOf; campos do outro tipo de documento vêm null.
+ */
+export const DOCUMENT_RESPONSE_SCHEMA = {
+  type: SchemaType.OBJECT,
+  properties: {
+    document_type: { type: SchemaType.STRING, format: "enum", enum: ["policy", "endorsement"] },
+    seguradora: nullableString,
+    segurado: {
+      type: SchemaType.OBJECT,
+      nullable: true,
+      properties: { nome: nullableString, cpf_cnpj: nullableString },
+      required: ["nome", "cpf_cnpj"],
+    },
+    apolice: {
+      type: SchemaType.OBJECT,
+      nullable: true,
+      properties: { numero: nullableString, inicio_vigencia: nullableDate, fim_vigencia: nullableDate },
+      required: ["numero", "inicio_vigencia", "fim_vigencia"],
+    },
+    veiculo: {
+      type: SchemaType.OBJECT,
+      nullable: true,
+      properties: { placa: nullableString, marca_modelo: nullableString, ano: nullableInt },
+      required: ["placa", "marca_modelo", "ano"],
+    },
+    policy_number: nullableString,
+    endorsement_number: nullableString,
+    endorsement_type: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: ["vehicle_change", "insured_change", "coverage_change", "other"],
+      nullable: true,
+    },
+    issued_at: nullableDate,
+    changes: {
+      type: SchemaType.OBJECT,
+      nullable: true,
+      properties: {
+        insured_name: nullableString,
+        cpf_cnpj: nullableString,
+        plate: nullableString,
+        brand_model: nullableString,
+        year: nullableInt,
+        start_date: nullableDate,
+        end_date: nullableDate,
+      },
+      required: ["insured_name", "cpf_cnpj", "plate", "brand_model", "year", "start_date", "end_date"],
+    },
+  },
+  // Todos os campos são obrigatórios (aceitando null): com campos opcionais o Gemini
+  // tende a omiti-los e devolver só document_type + nome, o que gerava apólices
+  // "SEM-NUMERO" sem vigência.
+  required: [
+    "document_type", "seguradora", "segurado", "apolice", "veiculo",
+    "policy_number", "endorsement_number", "endorsement_type", "issued_at", "changes",
+  ],
+};
 
 /**
  * Envia o PDF para o Gemini identificar se é uma apólice ou um endosso,
@@ -84,7 +152,7 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
     6. Se não conseguir determinar com certeza se é apólice ou endosso, prefira classificar como "policy".
   `;
 
-  let modelName = "gemini-1.5-flash";
+  let modelName = "gemini-flash-latest";
   let responseText;
 
   try {
@@ -92,19 +160,23 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
       model: modelName,
       generationConfig: {
         responseMimeType: "application/json",
+        responseSchema: DOCUMENT_RESPONSE_SCHEMA,
       },
     });
 
     const result = await model.generateContent([prompt, pdfPart]);
     responseText = result.response.text();
   } catch (error) {
-    const isModelNotFoundError = error.message && (
+    // Modelo indisponível (404 / descontinuado) ou sobrecarregado (503 / 429): tenta o fallback.
+    const isModelUnavailableError = error.message && (
       error.message.includes("not found") ||
       error.message.includes("404") ||
-      error.message.includes("not supported")
+      error.message.includes("not supported") ||
+      error.message.includes("503") ||
+      error.message.includes("429")
     );
 
-    if (isModelNotFoundError) {
+    if (isModelUnavailableError) {
       console.warn(`[Gemini] Modelo ${modelName} indisponível. Tentando fallback para gemini-flash-lite-latest...`);
       modelName = "gemini-flash-lite-latest";
 
@@ -113,6 +185,7 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
           model: modelName,
           generationConfig: {
             responseMimeType: "application/json",
+            responseSchema: DOCUMENT_RESPONSE_SCHEMA,
           },
         });
 
@@ -120,29 +193,84 @@ export async function extractDocumentData(pdfBuffer, apiKey) {
         responseText = result.response.text();
       } catch (fallbackError) {
         console.error(`[Gemini] Falha também no modelo de fallback ${modelName}:`, fallbackError);
-        throw new Error(`Falha na extração de dados com Gemini (ambos os modelos falharam): ${fallbackError.message}`);
+        throw new UserFacingError(AI_UNAVAILABLE_MESSAGE, 503);
       }
     } else {
       console.error("Erro na chamada da API do Gemini:", error);
-      throw new Error(`Falha na extração de dados com Gemini: ${error.message}`);
+      throw new UserFacingError(AI_UNAVAILABLE_MESSAGE, 503);
     }
   }
 
   try {
-    const extractedData = JSON.parse(responseText);
+    const parsedData = JSON.parse(responseText);
 
-    if (!extractedData.document_type) {
+    if (!parsedData.document_type) {
       // Fallback de segurança: se o Gemini não retornou document_type, assume policy
       console.warn("[Gemini] Campo document_type ausente na resposta. Assumindo 'policy'.");
-      extractedData.document_type = "policy";
+      parsedData.document_type = "policy";
     }
 
-    console.log(`[Gemini] Documento identificado como: ${extractedData.document_type}`);
+    console.log(`[Gemini] Documento identificado como: ${parsedData.document_type}`);
+    // Minimização de Dados (LGPD / ADR-007): remove campos não homologados ou excedentes
+    const extractedData = sanitizeExtractedData(parsedData);
     return extractedData;
   } catch (parseError) {
-    console.error("Erro ao parsear JSON retornado pelo Gemini:", parseError, "Resposta:", responseText);
-    throw new Error(`Resposta do Gemini inválida ou mal-formatada: ${parseError.message}`);
+    // A resposta bruta não é logada: contém os dados pessoais extraídos do PDF
+    console.error("Erro ao parsear JSON retornado pelo Gemini:", parseError.message);
+    throw new UserFacingError("Não foi possível ler os dados deste PDF. Verifique se o arquivo é uma apólice legível.", 422);
   }
+}
+
+/**
+ * Aplica o Princípio da Minimização de Dados (Art. 6º, III da LGPD / ADR-007).
+ * Garante que apenas os campos estritamente necessários para o contrato de seguro
+ * sejam mantidos, expurgando dados residuais como endereços, dados bancários ou parentes.
+ * 
+ * @param {Object} data Objeto JSON bruto retornado pela IA.
+ * @returns {Object} Objeto minimizado e sanitizado.
+ */
+export function sanitizeExtractedData(data) {
+  if (!data || typeof data !== "object") return {};
+
+  if (data.document_type === "endorsement") {
+    return {
+      document_type: "endorsement",
+      policy_number: data.policy_number ? String(data.policy_number).replace(/[^a-zA-Z0-9]/g, "").toUpperCase() : null,
+      endorsement_number: data.endorsement_number ? String(data.endorsement_number).trim() : null,
+      endorsement_type: data.endorsement_type || "other",
+      issued_at: data.issued_at || null,
+      seguradora: data.seguradora ? String(data.seguradora).trim() : "Desconhecida",
+      changes: {
+        insured_name: data.changes?.insured_name ? String(data.changes.insured_name).trim() : null,
+        cpf_cnpj: data.changes?.cpf_cnpj ? String(data.changes.cpf_cnpj).trim() : null,
+        plate: data.changes?.plate ? String(data.changes.plate).replace(/[^a-zA-Z0-9]/g, "").toUpperCase() : null,
+        brand_model: data.changes?.brand_model ? String(data.changes.brand_model).trim() : null,
+        year: data.changes?.year ? parseInt(data.changes.year, 10) || null : null,
+        start_date: data.changes?.start_date || null,
+        end_date: data.changes?.end_date || null
+      }
+    };
+  }
+
+  // Padrão: policy
+  return {
+    document_type: "policy",
+    segurado: {
+      nome: data.segurado?.nome ? String(data.segurado.nome).trim() : "Não Identificado",
+      cpf_cnpj: data.segurado?.cpf_cnpj ? String(data.segurado.cpf_cnpj).trim() : ""
+    },
+    seguradora: data.seguradora ? String(data.seguradora).trim() : "Desconhecida",
+    apolice: {
+      numero: data.apolice?.numero ? String(data.apolice.numero).replace(/[^a-zA-Z0-9]/g, "").toUpperCase() : "SEM-NUMERO",
+      inicio_vigencia: data.apolice?.inicio_vigencia || null,
+      fim_vigencia: data.apolice?.fim_vigencia || null
+    },
+    veiculo: {
+      placa: data.veiculo?.placa ? String(data.veiculo.placa).replace(/[^a-zA-Z0-9]/g, "").toUpperCase() : "",
+      brand_model: data.veiculo?.marca_modelo || data.veiculo?.brand_model || "Não Especificado",
+      ano: data.veiculo?.ano ? parseInt(data.veiculo.ano, 10) || null : null
+    }
+  };
 }
 
 /**

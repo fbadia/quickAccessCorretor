@@ -76,7 +76,11 @@ Tornar o SeguroNaMão a ferramenta de referência para corretores de seguros aut
 
 | Item | Prioridade | Status |
 |---|---|---|
+| Criptografia de PDFs e dados pessoais, blind index e direito ao esquecimento ([ADR-007](../ADRs/ADR-007-conformidade-lgpd-criptografia-dados.md) · [Sprint 1](./sprints/sprint-1.md)) | Alta | ✅ (homologação ⏳) |
+| Auditoria de segurança das mudanças da Sprint 1 | Alta | ✅ |
 | Auditoria completa de segurança | Alta | ⏳ |
+| Ambiente Supabase separado para dev/homologação | Alta | ⏳ |
+| Procedimento de rotação das chaves de criptografia | Média | ⏳ |
 | Política de retenção de dados | Alta | ⏳ |
 | Termo de uso e política de privacidade | Alta | ⏳ |
 | 2FA opcional para admins | Baixa | ⏳ |

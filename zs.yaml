@@ -24,6 +24,13 @@ services:
       - SUPABASE_SERVICE_ROLE_KEY=__SUBSTITUIR__
       # Google Gemini AI
       - GEMINI_API_KEY=__SUBSTITUIR__
+      # Superadmin inicial (injetado pelo CI a partir dos GitHub Secrets)
+      - SUPERADMIN_EMAIL=__SUBSTITUIR__
+      - SUPERADMIN_INITIAL_PASSWORD=__SUBSTITUIR__
+      # Criptografia LGPD (ADR-007) — injetadas pelo CI; o deploy falha sem elas
+      - STORAGE_ENCRYPTION_KEY=__SUBSTITUIR__
+      - DB_ENCRYPTION_KEY=__SUBSTITUIR__
+      - SEARCH_HMAC_KEY=__SUBSTITUIR__
       # Google Drive (opcional — remover se não usar sync via Drive)
       - GOOGLE_DRIVE_FOLDER_ID=__SUBSTITUIR__
       - GOOGLE_SERVICE_ACCOUNT_JSON=__SUBSTITUIR__

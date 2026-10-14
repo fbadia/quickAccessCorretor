@@ -16,7 +16,7 @@ Usar **Google Gemini 1.5 Flash** para analisar o PDF inteiro (como dado multimod
 
 ### Estratégia de fallback
 
-Se o modelo primário (`gemini-1.5-flash`) não estiver disponível, o sistema tenta automaticamente `gemini-flash-lite-latest` antes de retornar erro.
+Se o modelo primário (`gemini-flash-latest`) estiver indisponível ou sobrecarregado (404, 503, 429), o sistema tenta automaticamente `gemini-flash-lite-latest` antes de retornar erro.
 
 ### Deduplicação
 
@@ -55,8 +55,10 @@ O prompt instrui o modelo a retornar **exclusivamente JSON** sem markdown, com d
 ```javascript
 // geminiService.js
 const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash",
+  model: "gemini-flash-latest",
   generationConfig: { responseMimeType: "application/json" }
 });
 const result = await model.generateContent([prompt, pdfPart]);
 ```
+
+> **Atualização (2026-10-08):** o `gemini-1.5-flash` foi descontinuado pela Google (retorna 404). O modelo primário passou a ser o alias `gemini-flash-latest`, que acompanha a versão estável vigente, e a chamada agora usa `responseSchema` (Structured Outputs, ADR-007 / Story 1.2).

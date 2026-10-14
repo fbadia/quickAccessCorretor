@@ -9,7 +9,7 @@
 
 **SeguroNaMão** é uma aplicação SaaS multi-tenant mobile-first para corretores de seguros automotivos. Permite localizar rapidamente dados de segurados, apólices e contatos de assistência das seguradoras, mesmo fora do escritório.
 
-**Funcionalidade principal:** monitora uma pasta do Google Drive, lê apólices em PDF de seguradoras (Yelum, Porto Seguro, Bradesco, HDI, Allianz), extrai dados estruturados via Gemini 1.5 Flash e armazena no Supabase.
+**Funcionalidade principal:** monitora uma pasta do Google Drive, lê apólices em PDF de seguradoras (Yelum, Porto Seguro, Bradesco, HDI, Allianz), extrai dados estruturados via Gemini Flash (`gemini-flash-latest`) e armazena no Supabase, com PDFs e dados pessoais cifrados (LGPD — ADR-007).
 
 ---
 
@@ -34,7 +34,7 @@
 | **Frontend** | React 19 + Vite 8 + CSS Vanilla (mobile-first) | ZeroServer (Nginx container) |
 | **Backend** | Node.js 20 + Express | ZeroServer (Node container) |
 | **Banco / Auth / Storage** | Supabase (PostgreSQL + RLS + Magic Link) | Supabase Cloud |
-| **IA** | Google Gemini 1.5 Flash (extração de PDFs) | Google AI Studio |
+| **IA** | Google Gemini Flash — `gemini-flash-latest`, fallback `gemini-flash-lite-latest` (extração de PDFs com `responseSchema`) | Google AI Studio |
 | **Armazenamento de PDFs** | Supabase Storage (bucket `policies`) | Supabase Cloud |
 | **CI/CD** | GitHub Actions → build Docker → push GHCR → `zs deploy` | GitHub + ZeroServer |
 
@@ -48,7 +48,11 @@ quickAccessCorretor/
 │   ├── index.js           # Servidor Express principal (1095 linhas)
 │   ├── dbService.js       # Todas as queries ao Supabase
 │   ├── geminiService.js   # Integração com Gemini API (extração de PDFs)
-│   ├── storageService.js  # Upload/download/delete no Supabase Storage
+│   ├── storageService.js  # Upload/download/delete no Supabase Storage (cifra/decifra PDFs)
+│   ├── cryptoService.js   # AES-256-GCM (PDFs e PII), blind index HMAC, validação das chaves
+│   ├── testCryptoService.js # Testes do módulo criptográfico (node testCryptoService.js)
+│   ├── encryptLegacyData.js # Backfill LGPD: cifra dados antigos e renomeia PDFs (simula; --apply grava)
+│   ├── errors.js          # UserFacingError / toHttpError (mensagens seguras ao cliente)
 │   ├── testParser.js      # Utilitário CLI para testar extração de PDF local
 │   ├── Dockerfile         # Multi-stage: dev (nodemon) + production (node)
 │   ├── .dockerignore
@@ -72,8 +76,10 @@ quickAccessCorretor/
 ├── supabase/
 │   ├── schema.sql                              # Schema base do banco
 │   └── migrations/
+│       ├── 20260527_add_file_hash.sql          # Hash SHA-256 para deduplicação
 │       ├── 20260619_add_endorsements.sql       # Tabela de endossos
-│       └── 20260623_fix_multitenancy_rls.sql   # Isolamento multi-tenant crítico
+│       ├── 20260623_fix_multitenancy_rls.sql   # Isolamento multi-tenant crítico
+│       └── 20260904_add_lgpd_encryption.sql    # Blind indexes, cpf_cnpj anulável, bucket privado (ADR-007)
 │
 ├── .github/
 │   └── workflows/
@@ -110,8 +116,9 @@ profiles
 
 clients
   id UUID PK
-  name TEXT
-  cpf_cnpj TEXT        -- único por org (constraint: clients_cpf_cnpj_org_unique)
+  name TEXT            -- cifrado (enc:v1:...)
+  cpf_cnpj TEXT        -- cifrado; único por org (clients_cpf_cnpj_org_unique); NULL quando anonimizado
+  cpf_bidx TEXT        -- blind index HMAC-SHA256 do CPF/CNPJ (deduplicação)
   organization_id UUID → organizations.id
 
 policies
@@ -129,9 +136,11 @@ policies
 vehicles
   id UUID PK
   policy_id UUID → policies.id
-  plate TEXT
+  plate TEXT           -- cifrado (enc:v1:...)
+  plate_bidx TEXT      -- blind index HMAC-SHA256 da placa
   brand_model TEXT
   year INTEGER
+  is_current BOOLEAN   -- false quando substituído por endosso
   organization_id UUID → organizations.id
 
 insurers
@@ -211,7 +220,9 @@ POST /admin/users                              # Convidar usuário
 POST /api/policies/upload                      # Upload PDF (apólice ou endosso)
 GET  /api/endorsements/pending                 # Endossos pendentes de vínculo
 GET  /api/endorsements/:id/download            # Download de endosso
-GET  /api/policies/:policyId/download          # Download de apólice
+GET  /api/policies/:policyId/download          # Download de apólice (decifrado em memória)
+GET  /api/vehicles                             # Veículos vigentes da org com PII decifrada
+DELETE /api/policies/:policyId                 # Direito ao esquecimento (requireOrgAdmin)
 ```
 
 ### Upload de PDF (`POST /api/policies/upload`)
@@ -219,9 +230,12 @@ GET  /api/policies/:policyId/download          # Download de apólice
 Fluxo:
 1. Recebe arquivo via `multipart/form-data` (campo `file`, max 10MB)
 2. Calcula SHA-256 para deduplicação
-3. Faz upload para Supabase Storage (`policies/{orgId}/{filename}`)
-4. Chama Gemini para extrair dados e detectar tipo (apólice ou endosso)
-5. Salva no banco via `dbService.js`
+3. Chama Gemini para extrair dados e detectar tipo (apólice ou endosso) — **antes** do Storage,
+   para que uma falha de extração não deixe PDF órfão no bucket
+4. Faz upload cifrado para o Supabase Storage (`policies/{orgId}/{sha256}.pdf`); o caminho é único
+   e não usa o nome original do arquivo, que costuma conter nome do segurado e placa
+5. Salva no banco via `dbService.js` — se falhar, o PDF é removido do Storage caso nenhum
+   registro o referencie (`removeUnreferencedUpload`)
 6. Retorna `201` (criado) ou `202` (endosso pendente de vínculo) ou `200` (duplicado)
 
 ---
@@ -247,9 +261,19 @@ VITE_BACKEND_URL=            # vazio em prod (Nginx proxy); http://localhost:300
 ### Padrão de chamada ao backend
 
 ```javascript
-const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
 const response = await fetch(`${backendUrl}/api/policies/upload`, { ... });
 ```
+
+> ⚠️ Use `??`, nunca `||`: em produção `VITE_BACKEND_URL` é `""` (URL relativa via Nginx),
+> e `||` trocaria a string vazia por `localhost:3001`, quebrando todas as chamadas no aparelho.
+
+### Listagem de apólices
+
+O app carrega a lista via `GET /api/vehicles`, que devolve os dados já decifrados; a busca parcial
+(nome, placa, nº da apólice) é feita no próprio React. A consulta direta ao Supabase só é usada como
+fallback quando o backend está inacessível (erro de rede) — nunca em respostas de erro do backend,
+pois retornaria os campos cifrados.
 
 ### Autenticação
 
@@ -317,6 +341,16 @@ Push para `develop` → mesma pipeline com tag `:develop`
 | `VITE_SUPABASE_ANON_KEY` | Anon key do Supabase |
 | `ZS_TOKEN` | Token do ZeroServer (produção) |
 | `ZS_TOKEN_DEV` | Token do ZeroServer (dev) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role do Supabase (backend) |
+| `GEMINI_API_KEY` | Chave da API do Gemini |
+| `STORAGE_ENCRYPTION_KEY` | AES-256 dos PDFs — **obrigatório** (o CI aborta sem ele) |
+| `DB_ENCRYPTION_KEY` | AES-256 dos campos PII — **obrigatório** |
+| `SEARCH_HMAC_KEY` | HMAC dos blind indexes — **obrigatório** |
+| `SUPERADMIN_EMAIL` | E-mail do superadmin inicial (opcional) |
+| `SUPERADMIN_INITIAL_PASSWORD` | Senha inicial do superadmin, ≥ 12 caracteres (opcional) |
+
+Secrets não preenchidos têm a linha `=__SUBSTITUIR__` removida do `zs.yaml` no CI, para que o
+placeholder nunca chegue ao container como valor real.
 
 ---
 
@@ -329,7 +363,22 @@ GEMINI_API_KEY=                # Google AI Studio API key
 GOOGLE_DRIVE_FOLDER_ID=        # ID da pasta do Drive (opcional)
 GOOGLE_SERVICE_ACCOUNT_JSON=   # JSON da service account do Google (uma linha)
 PORT=3001
+
+# Superadmin inicial (criado no 1º boot se não existir; sem as variáveis, nada é criado)
+SUPERADMIN_EMAIL=
+SUPERADMIN_INITIAL_PASSWORD=   # ≥ 12 caracteres
+
+# LGPD (ADR-007) — 32 bytes em hex (64 caracteres), uma chave por propósito
+# Gerar: openssl rand -hex 32
+STORAGE_ENCRYPTION_KEY=        # cifra os PDFs no Storage
+DB_ENCRYPTION_KEY=             # cifra nome, CPF/CNPJ e placa no banco
+SEARCH_HMAC_KEY=               # blind indexes (nunca reutilizar a DB_ENCRYPTION_KEY)
 ```
+
+> ⚠️ **Chaves de criptografia são permanentes.** Perdê-las torna PDFs e dados irrecuperáveis —
+> mantenha cópia num gerenciador de senhas. Em `NODE_ENV=production` o backend não inicia sem as
+> três; configuração parcial é recusada em qualquer ambiente. Sem nenhuma chave (só em dev local),
+> os dados são gravados em texto claro, com aviso no log.
 
 ---
 
@@ -342,6 +391,12 @@ PORT=3001
 - Todo dado de usuário/org deve respeitar o isolamento RLS — sempre incluir `organization_id` nas queries.
 - O `superadmin` faz chamadas ao backend que usa `SERVICE_ROLE_KEY` — nunca expor essa role ao cliente.
 - Uploads: validar MIME type (`application/pdf`) e tamanho (≤10MB) antes de processar.
+- **LGPD (ADR-007):** nome, CPF/CNPJ e placa só podem ser gravados via `encryptText` + blind index
+  (`generateBlindIndex`) — inclusive em fluxos secundários como endossos. Buscas exatas usam as
+  colunas `*_bidx`, nunca o valor em claro. Arquivos vão ao Storage sempre por `storageService.js`.
+- Nunca logar PII (nome, CPF, placa, e-mail, nome original do arquivo) — logar apenas IDs e hashes.
+- Erros devolvidos ao cliente: só mensagens de `UserFacingError` (`backend/errors.js`); qualquer
+  outro erro vira mensagem genérica via `toHttpError`, com o detalhe apenas no log.
 
 ### Banco de Dados
 
@@ -424,6 +479,8 @@ docs/
 ├── README.md              # Índice central com links para todos os documentos
 ├── arquitetura.md         # Visão técnica completa (containers, fluxos, decisões)
 ├── api.md                 # Referência de todas as rotas, payloads e exemplos
+├── LGPD_COMPLIANCE.md     # Mapa de conformidade LGPD (dados, bases legais, controles)
+├── design-system-e-diretrizes.md  # Design system e diretrizes de UI
 │
 ├── ADRs/                  # Architecture Decision Records
 │   ├── ADR-001-supabase-backend-auth.md
@@ -431,12 +488,14 @@ docs/
 │   ├── ADR-003-gemini-extracao-pdfs.md
 │   ├── ADR-004-migracao-zeroserver.md
 │   ├── ADR-005-nginx-proxy-reverso.md
-│   └── ADR-006-rls-multitenancy.md
+│   ├── ADR-006-rls-multitenancy.md
+│   └── ADR-007-conformidade-lgpd-criptografia-dados.md
 │
 └── Gestao/                # Documentação de gestão do produto
     ├── roadmap.md         # Visão de produto, épicos e entregas
     └── sprints/
-        └── sprint-0.md   # Infra, containerização e deploy ZeroServer
+        ├── sprint-0.md   # Infra, containerização e deploy ZeroServer
+        └── sprint-1.md   # Segurança de dados e conformidade LGPD (ADR-007)
 ```
 
 ### Convenções
